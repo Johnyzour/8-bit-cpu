@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_data_ram.vhd
+-- Description : Self-checking testbench for data_ram. Tests initial contents,
+--               writes, the top address, blocked writes and write timing.
+-- Notes       : Prints "all tests completed and passed" at 90 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

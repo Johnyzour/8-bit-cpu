@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_flags_reg.vhd
+-- Description : Self-checking testbench for flags_reg. Tests reset, loading
+--               each flag independently, hold, reset priority and load timing.
+-- Notes       : Prints "all tests completed and passed" at 90 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

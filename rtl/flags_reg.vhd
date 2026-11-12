@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : flags_reg.vhd
+-- Description : Holds the Zero (Z) and Carry (C) flags between instructions.
+-- Notes       : Z and C have independent load enables, so logic operations can
+--               update Z while keeping C. Synchronous reset clears both and
+--               takes priority over the loads.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

@@ -1,3 +1,14 @@
+--------------------------------------------------------------------------------
+-- File        : cpu.vhd
+-- Description : Top level of the 8-bit single-cycle Harvard CPU. Instantiates
+--               and wires the PC, instruction ROM, control unit, register file,
+--               ALU, data RAM, flags register and writeback mux.
+-- Notes       : Each instruction completes in one clock: ROM, register and RAM
+--               reads settle during the cycle, then the rising edge updates the
+--               PC, registers, flags and RAM together.
+--               The *_dbg ports expose internal state for the testbench.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 
@@ -126,6 +137,3 @@ begin
     c_dbg     <= c_flag;
      
 end architecture structural;
-
-
-

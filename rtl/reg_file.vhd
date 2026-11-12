@@ -1,3 +1,12 @@
+--------------------------------------------------------------------------------
+-- File        : reg_file.vhd
+-- Description : Register file with four 8-bit registers (R0-R3), two read
+--               ports and one write port.
+-- Notes       : Reads are asynchronous; the write happens on the rising edge
+--               when wr_en = 1. Synchronous reset clears all four registers
+--               and takes priority over a write.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

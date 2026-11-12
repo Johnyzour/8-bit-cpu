@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_alu.vhd
+-- Description : Self-checking testbench for alu. 20 tests covering every
+--               operation, carry/borrow edge cases and the spare codes.
+-- Notes       : Prints "all tests completed and passed" at 200 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use work.cpu_pkg.all;

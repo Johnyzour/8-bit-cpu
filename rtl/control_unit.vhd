@@ -1,3 +1,13 @@
+--------------------------------------------------------------------------------
+-- File        : control_unit.vhd
+-- Description : Decodes the 4-bit opcode, plus the stored Z and C flags for
+--               conditional jumps, into the datapath control signals.
+-- Notes       : Combinational, single-cycle. Every output gets a default (NOP
+--               behaviour) before the case, so no latches are inferred.
+--               pc_inc is always 1; the PC gives pc_load priority, so a taken
+--               jump overrides the increment.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use work.cpu_pkg.all;

@@ -1,3 +1,13 @@
+--------------------------------------------------------------------------------
+-- File        : cpu_pkg.vhd
+-- Description : Shared constants for the CPU: 4-bit opcodes (OP_*), 3-bit ALU
+--               operation codes (ALU_*), 2-bit register numbers (REG0-REG3)
+--               and 2-bit writeback-mux selects (WB_*).
+-- Notes       : Instruction format: opcode(15:12) | rd(11:10) | rs(9:8) |
+--               imm(7:0).
+--               WB_* values must match the input order of wb_mux.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

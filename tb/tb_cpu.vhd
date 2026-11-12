@@ -1,3 +1,13 @@
+--------------------------------------------------------------------------------
+-- File        : tb_cpu.vhd
+-- Description : System testbench for cpu. Runs the program in instr_rom, which
+--               uses all 16 instructions, and checks the debug outputs every
+--               cycle against the expected trace.
+-- Notes       : Reset is held for the first cycle. Prints "all tests completed
+--               and passed" at 190 ns. Expected trace must be updated if the
+--               ROM program changes.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

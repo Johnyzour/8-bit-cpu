@@ -1,3 +1,12 @@
+--------------------------------------------------------------------------------
+-- File        : wb_mux.vhd
+-- Description : 4-to-1 writeback multiplexer choosing the value written to the
+--               register file: ALU result, RAM data, immediate or rs register.
+-- Notes       : Built from three mux2 instances. sel(0) picks within each pair
+--               (mux_a, mux_b); sel(1) picks the pair (mux_c).
+--               sel: 00 ALU, 01 RAM, 10 imm, 11 reg_b (see WB_* in cpu_pkg).
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : tb_reg_file.vhd
+-- Description : Self-checking testbench for reg_file. Tests reset, writes to
+--               every register, blocked writes, both ports on one register,
+--               reset beating a write, and write timing.
+-- Notes       : Prints "all tests completed and passed" at 140 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

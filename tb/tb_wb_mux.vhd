@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_wb_mux.vhd
+-- Description : Self-checking testbench for wb_mux. Checks all four select
+--               paths and that the output follows input changes.
+-- Notes       : Prints "all tests completed and passed" at 60 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use work.cpu_pkg.all;

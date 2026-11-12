@@ -1,3 +1,9 @@
+--------------------------------------------------------------------------------
+-- File        : mux2.vhd
+-- Description : 8-bit 2-to-1 multiplexer, gate-level.
+-- Notes       : sel = 0 selects in0, sel = 1 selects in1. Combinational.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

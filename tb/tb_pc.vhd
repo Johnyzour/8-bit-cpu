@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_pc.vhd
+-- Description : Self-checking testbench for pc. 10 tests: reset, increment,
+--               hold, load, load beating increment, wrap and reset priority.
+-- Notes       : Prints "all tests completed and passed" at 120 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

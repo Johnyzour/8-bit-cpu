@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_control_unit.vhd
+-- Description : Self-checking testbench for control_unit. 22 tests: every
+--               opcode, and each conditional jump both taken and not taken.
+-- Notes       : Prints "all tests completed and passed" at 220 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use work.cpu_pkg.all;
@@ -154,7 +161,7 @@ begin
         wait for 10 ns;
         assert(tb_reg_wr_en = '1')   report "test 9 failed: reg_wr_en" severity failure;
         assert(tb_wb_sel = WB_ALU)   report "test 9 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_OR) report "test 9 failed: alu_sel"   severity failure;
+        assert(tb_alu_sel = ALU_OR)  report "test 9 failed: alu_sel"   severity failure;
         assert(tb_ram_wr_en = '0')   report "test 9 failed: ram_wr_en" severity failure;
         assert(tb_z_load = '1')      report "test 9 failed: z_load"    severity failure;
         assert(tb_c_load = '0')      report "test 9 failed: c_load"    severity failure;

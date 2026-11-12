@@ -1,3 +1,12 @@
+--------------------------------------------------------------------------------
+-- File        : alu.vhd
+-- Description : 8-bit ALU. Operations: ADD, SUB, AND, OR, XOR, NOT (selected by
+--               alu_sel). Codes 110 and 111 output 00.
+-- Notes       : Combinational. Carry is bit 8 of a 9-bit add/subtract; for SUB
+--               it is a borrow (1 when a < b). Carry is 0 for logic operations.
+--               Zero is 1 when the result is 00. NOT ignores input b.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

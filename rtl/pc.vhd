@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : pc.vhd
+-- Description : 8-bit program counter with synchronous reset, load and
+--               increment.
+-- Notes       : Priority on the rising edge: reset > load > increment > hold.
+--               Increment wraps from FF to 00.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

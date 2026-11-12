@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : instr_rom.vhd
+-- Description : 256 x 16-bit instruction ROM holding the program.
+-- Notes       : Asynchronous read. To change the program, edit rom_data; each
+--               entry is built as opcode & rd & rs & imm from cpu_pkg constants.
+--               Unused addresses hold 0000 (NOP).
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

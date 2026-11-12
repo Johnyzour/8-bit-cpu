@@ -1,3 +1,10 @@
+--------------------------------------------------------------------------------
+-- File        : tb_mux2.vhd
+-- Description : Self-checking testbench for mux2. 10 tests with both select
+--               values over several bit patterns.
+-- Notes       : Prints "all tests completed and passed" at 100 ns.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 

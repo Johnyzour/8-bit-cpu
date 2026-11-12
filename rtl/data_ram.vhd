@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : data_ram.vhd
+-- Description : 256 x 8-bit data RAM.
+-- Notes       : Synchronous write when wr_en = 1, asynchronous read.
+--               No reset: contents survive a CPU reset, and programs should
+--               initialise any memory they rely on. Starts at 00 in simulation.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

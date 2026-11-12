@@ -1,3 +1,11 @@
+--------------------------------------------------------------------------------
+-- File        : tb_instr_rom.vhd
+-- Description : Self-checking testbench for instr_rom. Checks selected program
+--               words against hand-encoded hex, plus empty and top addresses.
+-- Notes       : Prints "all tests completed and passed" at 70 ns.
+--               Expected values must be updated if the ROM program changes.
+--------------------------------------------------------------------------------
+
 library ieee;
 use ieee.std_logic_1164.all;
 
