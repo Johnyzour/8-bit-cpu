@@ -1,16 +1,18 @@
 --------------------------------------------------------------------------------
 -- File        : cpu.vhd
--- Description : Top level of the 8-bit single-cycle Harvard CPU. Instantiates
---               and wires the PC, instruction ROM, control unit, register file,
---               ALU, data RAM, flags register and writeback mux.
--- Notes       : Each instruction completes in one clock: ROM, register and RAM
---               reads settle during the cycle, then the rising edge updates the
---               PC, registers, flags and RAM together.
+-- Description : Top level of the 8-bit multi-cycle Harvard CPU. Instantiates
+--               and wires the PC, instruction ROM, instruction register,
+--               control FSM, register file, ALU, data RAM, flags register and
+--               writeback mux.
+-- Notes       : Each instruction takes 3 or 4 clocks (FETCH, DECODE, EXECUTE,
+--               WRITEBACK). The IR holds the instruction for the whole
+--               sequence; the control FSM enables each write only in its state.
 --               The *_dbg ports expose internal state for the testbench.
 --------------------------------------------------------------------------------
 
 library ieee;
 use ieee.std_logic_1164.all;
+use work.cpu_pkg.all;
 
 entity cpu is
     port (
@@ -20,7 +22,8 @@ entity cpu is
         instr_dbg : out std_logic_vector (15 downto 0);
         reg_a_dbg : out std_logic_vector (7 downto 0);
         z_dbg     : out std_logic;
-        c_dbg     : out std_logic
+        c_dbg     : out std_logic;
+        state_dbg : out state_t
     );
 end entity cpu;
 
@@ -44,6 +47,9 @@ architecture structural of cpu is
     signal pc_inc     : std_logic;
     signal wb_sel     : std_logic_vector (1 downto 0);
     signal alu_sel    : std_logic_vector (2 downto 0);
+    signal rom_out    : std_logic_vector (15 downto 0);
+    signal ir_load    : std_logic;
+    signal state      : state_t;
 begin
     u_pc : entity work.pc
     port map (
@@ -58,11 +64,22 @@ begin
     u_instr_rom : entity work.instr_rom
     port map (
         addr  => pc_val,
-        instr => instr
+        instr => rom_out
+    );
+    
+    u_ir : entity work.ir
+    port map (
+        clk      => clk,
+        rst      => rst,
+        ir_load  => ir_load,
+        data_in  => rom_out,
+        data_out => instr
     );
     
     u_control_unit : entity work.control_unit
     port map (
+        clk       => clk,
+        rst       => rst,
         opcode    => instr(15 downto 12),
         z_flag    => z_flag,
         c_flag    => c_flag,
@@ -73,7 +90,9 @@ begin
         z_load    => z_load,
         c_load    => c_load,
         pc_load   => pc_load,
-        pc_inc    => pc_inc
+        pc_inc    => pc_inc,
+        ir_load   => ir_load,
+        state_out => state
     );
     
     u_reg_file : entity work.reg_file
@@ -135,5 +154,6 @@ begin
     reg_a_dbg <= reg_a; 
     z_dbg     <= z_flag; 
     c_dbg     <= c_flag;
+    state_dbg <= state;
      
 end architecture structural;

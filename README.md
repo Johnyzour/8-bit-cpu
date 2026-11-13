@@ -1,48 +1,41 @@
-# 8-bit CPU in VHDL
+# 8-bit CPU in VHDL — Multi-cycle version
 
-A simple 8-bit, single-cycle, Harvard-architecture CPU written in VHDL and verified
-with self-checking testbenches in the Vivado behavioral simulator (XSIM).
+A simple 8-bit, **multi-cycle**, Harvard-architecture CPU written in VHDL and
+verified with self-checking testbenches in the Vivado behavioral simulator (XSIM).
 
-The CPU has a 16-bit instruction word, four general-purpose registers, Zero and
-Carry flags, and a 16-instruction set covering load/store, arithmetic, logic,
-compare and conditional jumps. Every component has its own testbench, and a
-system testbench runs a program that uses all 16 instructions and checks the
-CPU state on every clock cycle.
+This branch converts the single-cycle CPU on `main` into a multi-cycle design.
+An instruction register holds each instruction while a finite-state-machine
+(FSM) control unit steps it through FETCH, DECODE, EXECUTE and WRITEBACK, taking
+3 or 4 clocks per instruction. The instruction set, the program and every
+datapath component except the control unit are unchanged.
 
-**Status:** RTL complete. All 10 testbenches pass.
+**Status:** RTL complete. All 11 testbenches pass.
 
 > **Branches**
 >
 > | Branch | Version | Status |
 > |---|---|---|
 > | `main` | Single-cycle CPU (tag `v1.0-single-cycle`) | Complete and verified |
-> | `multicycle` | Multi-cycle CPU with an FSM control unit | **Under development, not finished.** Code on this branch may be incomplete or fail its testbenches |
->
-> This README describes the single-cycle version on `main`.
+> | `multicycle` | Multi-cycle CPU with an FSM control unit | Complete and verified (this branch) |
 
 ---
 
 ## Table of contents
 
 - [Features](#features)
+- [Single-cycle vs multi-cycle](#single-cycle-vs-multi-cycle)
 - [Architecture](#architecture)
   - [Design decisions](#design-decisions)
   - [Datapath](#datapath)
-  - [Single-cycle execution](#single-cycle-execution)
+  - [Control FSM](#control-fsm)
+  - [Cycles per instruction](#cycles-per-instruction)
   - [Writeback multiplexer](#writeback-multiplexer)
 - [Instruction set](#instruction-set)
-  - [Instruction format](#instruction-format)
-  - [Instructions](#instructions)
-  - [Encoding examples](#encoding-examples)
-  - [Flags](#flags)
 - [Control unit](#control-unit)
 - [Components](#components)
 - [Project structure](#project-structure)
 - [Running the simulation](#running-the-simulation)
 - [Verification](#verification)
-  - [Component testbenches](#component-testbenches)
-  - [System test program](#system-test-program)
-  - [Expected trace](#expected-trace)
 - [Writing your own program](#writing-your-own-program)
 - [Limitations](#limitations)
 - [Future work](#future-work)
@@ -56,10 +49,29 @@ CPU state on every clock cycle.
 - Harvard architecture: separate 256 x 16 instruction ROM and 256 x 8 data RAM
 - Four 8-bit general-purpose registers (R0-R3)
 - Zero (Z) and Carry (C) flags with independent load enables
-- Single-cycle execution: one instruction per clock
+- **Multi-cycle execution:** 3 or 4 clocks per instruction, driven by a 4-state FSM
+- 16-bit instruction register (IR) holding the instruction for the whole sequence
 - Synchronous reset
-- Fully point-to-point datapath with multiplexers (no tri-state bus)
-- Self-checking testbenches for every component, plus a full-system testbench
+- Point-to-point datapath with multiplexers (no tri-state bus)
+- Self-checking testbenches for every component, plus a full-system testbench that checks the FSM state on every cycle
+
+---
+
+## Single-cycle vs multi-cycle
+
+| | Single-cycle (`main`) | Multi-cycle (this branch) |
+|---|---|---|
+| Clocks per instruction | 1 | 3 or 4 |
+| Control unit | Combinational `case` on the opcode | FSM: state register + next-state logic + output logic |
+| Instruction register | None (ROM output used directly) | 16-bit IR, loaded in FETCH |
+| When things are written | Everything on the same edge | Each write only in its own state |
+| `pc_inc` | Always 1 | 1 only in FETCH |
+| Test program, reset to halt | 16 cycles | 56 cycles |
+| Debug outputs | `pc`, `instr`, `reg_a`, `z`, `c` | Same, plus `state_dbg` |
+
+The multi-cycle design is slower per instruction in clock count, but each
+clock does less work, so the critical path is shorter. It is also the starting
+point for designs with synchronous memories or a shared instruction/data memory.
 
 ---
 
@@ -69,13 +81,15 @@ CPU state on every clock cycle.
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Memory model | Harvard: separate instruction ROM and data RAM | Fetch and data access never collide, so every instruction fits in one cycle. A program cannot overwrite its own code |
+| Memory model | Harvard: separate instruction ROM and data RAM | Fetch and data access never collide. A program cannot overwrite its own code |
 | Interconnect | Point-to-point wiring plus a writeback multiplexer | FPGA fabric has no internal tri-state buses; multiplexers avoid conflicting drivers |
-| Data width | 8 bits | It is an 8-bit CPU: registers, ALU and RAM are all 8 bits wide |
-| Instruction width | 16 bits | An 8-bit word cannot hold an opcode plus an 8-bit constant or address. Harvard lets the ROM be wider than the data |
+| Data width | 8 bits | Registers, ALU and RAM are all 8 bits wide |
+| Instruction width | 16 bits | An 8-bit word cannot hold an opcode plus an 8-bit constant or address |
 | Registers | 4 x 8-bit (R0-R3) | Fits a 2-bit register field, leaving 8 bits for an immediate |
-| Control | Single-cycle | Memory reads are asynchronous, so fetch, decode, execute and writeback all settle within one clock |
-| Reset | Synchronous, highest priority | Used by the PC, register file and flags register. The data RAM has no reset |
+| Control | Multi-cycle FSM, 4 states | Each instruction uses only the states it needs (3 or 4) |
+| Holding registers | IR only | Registers change only in WRITEBACK, so ALU inputs and result stay stable from DECODE to WRITEBACK without A/B/ALUOut registers |
+| Selects vs enables | Selects (`alu_sel`, `wb_sel`) from the opcode only; enables from the state | Selects choose *what*; enables decide *when*. Keeps the output logic simple |
+| Reset | Synchronous, highest priority | PC, IR, register file, flags register and FSM (back to FETCH). The data RAM has no reset |
 | Flags | Zero and Carry only | Enough for JZ, JNZ and JC |
 | Carry on SUB | Borrow convention: C = 1 when a < b | `JC` after `CMP a, b` means "jump if a < b" (unsigned) |
 
@@ -84,15 +98,16 @@ CPU state on every clock cycle.
 ```mermaid
 flowchart LR
     PC["Program Counter<br/>pc"] -->|"pc_val (8)"| ROM["Instruction ROM<br/>instr_rom<br/>256 x 16"]
+    ROM -->|"rom_out (16)"| IR["Instruction Register<br/>ir"]
 
-    ROM -->|"instr(15:12) opcode"| CU["Control Unit<br/>control_unit"]
-    ROM -->|"instr(11:10) rd"| RF["Register File<br/>reg_file<br/>R0-R3"]
-    ROM -->|"instr(9:8) rs"| RF
-    ROM -->|"instr(7:0) imm"| IMM(("imm"))
+    IR -->|"instr(15:12) opcode"| CU["Control FSM<br/>control_unit"]
+    IR -->|"instr(11:10) rd"| RF["Register File<br/>reg_file<br/>R0-R3"]
+    IR -->|"instr(9:8) rs"| RF
+    IR -->|"instr(7:0) imm"| IMM(("imm"))
 
     IMM -->|"jump_addr"| PC
     IMM -->|"addr"| RAM["Data RAM<br/>data_ram<br/>256 x 8"]
-    IMM -->|"in2"| WB["Writeback Mux<br/>wb_mux"]
+    IMM -->|"imm"| WB["Writeback Mux<br/>wb_mux"]
 
     RF -->|"reg_a (rd)"| ALU["ALU<br/>alu"]
     RF -->|"reg_b (rs)"| ALU
@@ -106,6 +121,7 @@ flowchart LR
     ALU -->|"zero, carry"| FL["Flags Register<br/>flags_reg"]
     FL -->|"z_flag, c_flag"| CU
 
+    CU -. "ir_load" .-> IR
     CU -. "pc_load, pc_inc" .-> PC
     CU -. "reg_wr_en" .-> RF
     CU -. "alu_sel" .-> ALU
@@ -114,48 +130,50 @@ flowchart LR
     CU -. "wb_sel" .-> WB
 ```
 
-Solid arrows are data; dotted arrows are control signals from the control unit.
+Solid arrows are data; dotted arrows are control signals from the FSM.
 
-How the instruction fields are routed:
+The only datapath change from `main` is the IR between the ROM and the
+instruction fields. Every `instr(...)` slice now comes from the IR, so the
+instruction stays stable while the FSM steps through its states, even though
+the PC has already moved on to the next address.
 
-| Field | Bits | Goes to |
-|---|---|---|
-| opcode | 15:12 | Control unit |
-| rd | 11:10 | Register file read port A **and** write select (rd is both a source and the destination) |
-| rs | 9:8 | Register file read port B |
-| imm | 7:0 | PC jump address, data RAM address, writeback mux (immediate value) |
-
-The same `imm` bits always reach all three destinations; the control signals decide which one actually uses them.
-
-### Single-cycle execution
-
-Every instruction takes exactly one clock period:
+### Control FSM
 
 ```mermaid
-sequenceDiagram
-    participant CLK as Clock
-    participant PC as PC
-    participant ROM as ROM
-    participant CU as Control + Datapath
-    participant ST as PC / Registers / Flags / RAM
-
-    CLK->>PC: rising edge: PC updates
-    PC->>ROM: new address (asynchronous read)
-    ROM->>CU: instruction word
-    Note over CU: decode, register read,<br/>ALU, RAM read, writeback mux<br/>all settle during the cycle
-    CU->>ST: next-state values waiting at inputs
-    CLK->>ST: next rising edge: all state commits together
+stateDiagram-v2
+    [*] --> FETCH: rst
+    FETCH --> DECODE
+    DECODE --> WRITEBACK: LDI, MOV
+    DECODE --> EXECUTE: all other opcodes
+    EXECUTE --> WRITEBACK: ADD, SUB, AND, OR, XOR, NOT, LD
+    EXECUTE --> FETCH: NOP, ST, CMP, JMP, JZ, JNZ, JC
+    WRITEBACK --> FETCH
 ```
 
-1. After a rising edge, the new PC value addresses the ROM.
-2. The instruction word, control signals, register reads, ALU result, RAM read and writeback value all settle combinationally.
-3. On the next rising edge the PC, register file, flags register and data RAM update at the same time.
+| State | Work done | Enables active |
+|---|---|---|
+| FETCH | IR loads `ROM[PC]`; PC increments | `ir_load`, `pc_inc` |
+| DECODE | Opcode stable in the IR; register reads settle; next state chosen from the opcode | none |
+| EXECUTE | ALU result settles; flags load; ST writes RAM; jumps load the PC | `z_load`, `c_load`, `ram_wr_en`, `pc_load` (per opcode) |
+| WRITEBACK | Result written to rd | `reg_wr_en` |
 
-Because there is no instruction register, a waveform reads like the program: each clock period is one instruction.
+Why it works without extra holding registers:
+
+- **PC+1 happens in FETCH, a jump loads in EXECUTE.** They never collide; a taken jump overwrites the already-incremented PC.
+- **The register file only changes in WRITEBACK.** ALU inputs, and therefore its result, are stable from DECODE through WRITEBACK.
+- **Flags load in EXECUTE.** They are stable by the time any later jump reads them.
+
+### Cycles per instruction
+
+| Instructions | Path | Clocks |
+|---|---|---|
+| NOP, ST, CMP, JMP, JZ, JNZ, JC | FETCH → DECODE → EXECUTE | 3 |
+| LDI, MOV | FETCH → DECODE → WRITEBACK | 3 |
+| ADD, SUB, AND, OR, XOR, NOT, LD | FETCH → DECODE → EXECUTE → WRITEBACK | 4 |
 
 ### Writeback multiplexer
 
-The register file can be written from four sources. `wb_mux` is a 4-to-1 multiplexer built from three 2-to-1 multiplexers (`mux2`):
+`wb_mux` is a 4-to-1 multiplexer built from three 2-to-1 multiplexers (`mux2`):
 
 ```mermaid
 flowchart LR
@@ -168,8 +186,6 @@ flowchart LR
     MC --> W["wb_data<br/>to register file"]
 ```
 
-Bit 0 picks within each pair; bit 1 picks the pair.
-
 | wb_sel | Constant | Source | Used by |
 |---|---|---|---|
 | 00 | `WB_ALU` | ALU result | ADD, SUB, AND, OR, XOR, NOT |
@@ -181,6 +197,8 @@ Bit 0 picks within each pair; bit 1 picks the pair.
 
 ## Instruction set
 
+Unchanged from `main`.
+
 ### Instruction format
 
 ```
@@ -191,20 +209,7 @@ Bit 0 picks within each pair; bit 1 picks the pair.
   4 bits  2 bits 2 bits       8 bits
 ```
 
-Unused fields are 0. In hexadecimal the word reads naturally:
-
-| Hex digit | 1 | 2 | 3 and 4 |
-|---|---|---|---|
-| Meaning | opcode | 4 x rd + rs | imm |
-
-Digit 2 lookup:
-
-| | rs = R0 | rs = R1 | rs = R2 | rs = R3 |
-|---|---|---|---|---|
-| **rd = R0** | 0 | 1 | 2 | 3 |
-| **rd = R1** | 4 | 5 | 6 | 7 |
-| **rd = R2** | 8 | 9 | A | B |
-| **rd = R3** | C | D | E | F |
+Unused fields are 0. In hexadecimal: digit 1 is the opcode, digit 2 is `4 x rd + rs`, digits 3-4 are imm.
 
 ### Instructions
 
@@ -227,55 +232,67 @@ Digit 2 lookup:
 | E | `JNZ addr` | PC = addr if Z = 0 | - |
 | F | `JC addr` | PC = addr if C = 1 | - |
 
-An all-zero ROM is a valid program (all NOPs). `JMP` to its own address acts as a halt.
-
-### Encoding examples
-
-| Instruction | Fields (opcode rd rs imm) | Hex |
-|---|---|---|
-| `LDI R1, 05` | 0001 01 00 00000101 | `1405` |
-| `MOV R2, R1` | 0010 10 01 00000000 | `2900` |
-| `ADD R1, R2` | 0101 01 10 00000000 | `5600` |
-| `SUB R0, R1` | 0110 00 01 00000000 | `6100` |
-| `ST R2, 20` | 0100 10 00 00100000 | `4820` |
-| `JNZ 02` | 1110 00 00 00000010 | `E002` |
-| `JMP 12` | 1100 00 00 00010010 | `C012` |
+`JMP` to its own address acts as a halt (the FSM keeps cycling FETCH, DECODE, EXECUTE on it).
 
 ### Flags
 
 | Flag | Set when | Updated by | Read by |
 |---|---|---|---|
 | Z (zero) | ALU result is 00 | ADD, SUB, CMP, AND, OR, XOR, NOT | JZ, JNZ |
-| C (carry) | ADD: result overflowed past FF. SUB/CMP: borrow (rd < rs) | ADD, SUB, CMP only | JC |
+| C (carry) | ADD: overflow past FF. SUB/CMP: borrow (rd < rs) | ADD, SUB, CMP only | JC |
 
-Logic operations update Z but **keep** C: the ALU outputs carry = 0 for logic operations, so the flags register has a separate load enable for each flag. Instructions that do not affect flags leave both unchanged, so a conditional jump can test the result of an instruction several steps earlier.
+Logic operations update Z but keep C, so the flags register has a separate load enable per flag.
 
 ---
 
 ## Control unit
 
-The control unit is purely combinational: a block of defaults (NOP behaviour) followed by one `case` on the opcode. Each branch overrides only what differs from the defaults.
+`control_unit.vhd` is a three-process FSM:
 
-| Opcode | reg_wr_en | wb_sel | alu_sel | ram_wr_en | z_load | c_load | pc_load |
-|---|---|---|---|---|---|---|---|
-| NOP | 0 | ALU | ADD | 0 | 0 | 0 | 0 |
-| LDI | **1** | **IMM** | ADD | 0 | 0 | 0 | 0 |
-| MOV | **1** | **REG** | ADD | 0 | 0 | 0 | 0 |
-| LD | **1** | **RAM** | ADD | 0 | 0 | 0 | 0 |
-| ST | 0 | ALU | ADD | **1** | 0 | 0 | 0 |
-| ADD | **1** | ALU | ADD | 0 | **1** | **1** | 0 |
-| SUB | **1** | ALU | **SUB** | 0 | **1** | **1** | 0 |
-| AND | **1** | ALU | **AND** | 0 | **1** | 0 | 0 |
-| OR | **1** | ALU | **OR** | 0 | **1** | 0 | 0 |
-| XOR | **1** | ALU | **XOR** | 0 | **1** | 0 | 0 |
-| NOT | **1** | ALU | **NOT** | 0 | **1** | 0 | 0 |
-| CMP | 0 | ALU | **SUB** | 0 | **1** | **1** | 0 |
-| JMP | 0 | ALU | ADD | 0 | 0 | 0 | **1** |
-| JZ | 0 | ALU | ADD | 0 | 0 | 0 | **Z** |
-| JNZ | 0 | ALU | ADD | 0 | 0 | 0 | **not Z** |
-| JC | 0 | ALU | ADD | 0 | 0 | 0 | **C** |
+| Process | Type | Contents |
+|---|---|---|
+| `state_reg` | Clocked | Synchronous reset to FETCH, otherwise `state <= next_state` |
+| `next_state_logic` | Combinational | Transition table below |
+| `output_logic` | Combinational | Defaults, then selects from the opcode, then enables from the state |
 
-`pc_inc` is always 1. The PC gives `pc_load` priority over increment, so a taken jump overrides it automatically.
+The state type `state_t` is declared in `cpu_pkg`, so it can appear on ports and the waveform shows state names.
+
+### Next state
+
+| Current | Condition | Next |
+|---|---|---|
+| FETCH | always | DECODE |
+| DECODE | LDI, MOV | WRITEBACK |
+| DECODE | otherwise | EXECUTE |
+| EXECUTE | ADD, SUB, AND, OR, XOR, NOT, LD | WRITEBACK |
+| EXECUTE | otherwise | FETCH |
+| WRITEBACK | always | FETCH |
+
+### Selects (from the opcode, in every state)
+
+| Opcode | alu_sel | wb_sel |
+|---|---|---|
+| ADD | ADD | ALU |
+| SUB, CMP | SUB | ALU |
+| AND / OR / XOR / NOT | AND / OR / XOR / NOT | ALU |
+| LDI | ADD | IMM |
+| MOV | ADD | REG |
+| LD | ADD | RAM |
+| others | ADD | ALU |
+
+### Enables (by state)
+
+| State | Opcode | Enables = 1 |
+|---|---|---|
+| FETCH | any | `ir_load`, `pc_inc` |
+| DECODE | any | none |
+| EXECUTE | ADD, SUB, CMP | `z_load`, `c_load` |
+| EXECUTE | AND, OR, XOR, NOT | `z_load` |
+| EXECUTE | ST | `ram_wr_en` |
+| EXECUTE | JMP | `pc_load` |
+| EXECUTE | JZ / JNZ / JC | `pc_load` = Z / not Z / C |
+| EXECUTE | NOP, LD | none |
+| WRITEBACK | any | `reg_wr_en` |
 
 ---
 
@@ -283,11 +300,12 @@ The control unit is purely combinational: a block of defaults (NOP behaviour) fo
 
 | Entity | File | Type | Description |
 |---|---|---|---|
-| `cpu_pkg` | `cpu_pkg.vhd` | Package | Opcode (`OP_*`), ALU (`ALU_*`), register (`REG0`-`REG3`) and writeback-select (`WB_*`) constants |
+| `cpu_pkg` | `cpu_pkg.vhd` | Package | `OP_*`, `ALU_*`, `REG0`-`REG3`, `WB_*` constants and the FSM state type `state_t` |
 | `cpu` | `cpu.vhd` | Structural | Top level; instantiates and wires every component. Exposes debug outputs |
-| `pc` | `pc.vhd` | Sequential | 8-bit program counter. Priority: reset > load > increment > hold. Wraps FF to 00 |
-| `instr_rom` | `instr_rom.vhd` | Combinational | 256 x 16 instruction ROM, asynchronous read. Holds the program |
-| `control_unit` | `control_unit.vhd` | Combinational | Opcode and flags to control signals |
+| `pc` | `pc.vhd` | Sequential | 8-bit program counter. Priority: reset > load > increment > hold |
+| `instr_rom` | `instr_rom.vhd` | Combinational | 256 x 16 instruction ROM, asynchronous read |
+| `ir` | `ir.vhd` | Sequential | **New.** 16-bit instruction register, loaded in FETCH |
+| `control_unit` | `control_unit.vhd` | Sequential (FSM) | **Rewritten.** 4-state control FSM |
 | `reg_file` | `reg_file.vhd` | Sequential | 4 x 8-bit registers, two asynchronous read ports, one synchronous write port |
 | `alu` | `alu.vhd` | Combinational | ADD, SUB, AND, OR, XOR, NOT with zero and carry outputs |
 | `flags_reg` | `flags_reg.vhd` | Sequential | Stores Z and C with independent load enables |
@@ -301,6 +319,7 @@ The control unit is purely combinational: a block of defaults (NOP behaviour) fo
 flowchart TD
     CPU["cpu"] --> PC["pc"]
     CPU --> ROM["instr_rom"]
+    CPU --> IR["ir"]
     CPU --> CU["control_unit"]
     CPU --> RF["reg_file"]
     CPU --> ALU["alu"]
@@ -313,19 +332,19 @@ flowchart TD
     PKG["cpu_pkg"] -. used by .-> ROM
     PKG -. used by .-> CU
     PKG -. used by .-> ALU
+    PKG -. used by .-> CPU
 ```
 
 ### Debug outputs
 
-The `cpu` entity has only `clk` and `rst` as functional inputs. Five debug outputs let the testbench observe internal state:
-
 | Port | Width | Shows |
 |---|---|---|
-| `pc_dbg` | 8 | Current program counter |
-| `instr_dbg` | 16 | Current instruction word |
-| `reg_a_dbg` | 8 | Value of the rd register of the current instruction |
+| `pc_dbg` | 8 | Program counter (already the next address after FETCH) |
+| `instr_dbg` | 16 | Instruction register |
+| `reg_a_dbg` | 8 | Value of the rd register of the instruction in the IR |
 | `z_dbg` | 1 | Stored zero flag |
 | `c_dbg` | 1 | Stored carry flag |
+| `state_dbg` | `state_t` | Current FSM state |
 
 ---
 
@@ -338,6 +357,7 @@ The `cpu` entity has only `clk` and `rst` as functional inputs. Five debug outpu
 │   ├── cpu.vhd
 │   ├── pc.vhd
 │   ├── instr_rom.vhd
+│   ├── ir.vhd
 │   ├── control_unit.vhd
 │   ├── reg_file.vhd
 │   ├── alu.vhd
@@ -349,6 +369,7 @@ The `cpu` entity has only `clk` and `rst` as functional inputs. Five debug outpu
 │   ├── tb_cpu.vhd
 │   ├── tb_pc.vhd
 │   ├── tb_instr_rom.vhd
+│   ├── tb_ir.vhd
 │   ├── tb_control_unit.vhd
 │   ├── tb_reg_file.vhd
 │   ├── tb_alu.vhd
@@ -361,66 +382,58 @@ The `cpu` entity has only `clk` and `rst` as functional inputs. Five debug outpu
 
 ### Coding conventions
 
-- `std_logic_vector` at ports, `numeric_std` for arithmetic (never `std_logic_unsigned`)
+- `std_logic_vector` at ports, `numeric_std` for arithmetic
 - Architectures named `rtl` (behavioural), `structural` (instantiation only) or `sim` (testbenches)
 - Synchronous active-high reset
 - Instances prefixed `u_` in the top level
 - Every combinational process assigns defaults before any branching, so no latches are inferred
+- FSM states as an enumerated type, so waveforms and failure messages show state names
 
 ---
 
 ## Running the simulation
 
-The project uses Vivado's behavioral simulator (XSIM). No FPGA board is needed.
-
-1. Create a new RTL project in Vivado (no board or part needed beyond the default).
+1. Create a new RTL project in Vivado.
 2. **Add design sources:** every file in `rtl/`.
 3. **Add simulation sources:** every file in `tb/`.
-4. **Compile order:** `cpu_pkg.vhd` must compile before the files that use it (`alu`, `control_unit`, `instr_rom`). In the Sources panel, right-click → **Hierarchy Update** → **Automatic Update and Compile Order**, then check in the **Compile Order** tab that `cpu_pkg.vhd` is at the top.
-5. In **Simulation Sources**, right-click the testbench to run → **Set as Top**.
+4. **Compile order:** `cpu_pkg.vhd` must compile first (it is used by `alu`, `control_unit`, `instr_rom`, `cpu` and several testbenches). Right-click in Sources → **Hierarchy Update** → **Automatic Update and Compile Order**, then check the **Compile Order** tab.
+5. Right-click the testbench to run → **Set as Top**.
 6. **Run Simulation** → **Run Behavioral Simulation**.
-7. Check the Tcl Console for the final message.
+7. Check the Tcl Console for `Note: all tests completed and passed`.
 
-A passing run prints:
-
-```
-Note: all tests completed and passed
-```
-
-A failing run stops at the first failed check with a message naming the test and the signal, for example:
+A failing run stops at the first failed check, naming the test and signal, for example:
 
 ```
-Failure: test 8 failed: carry
+Failure: cycle 28 failed: pc_dbg
+Failure: test 8 AND execute failed: z_load
+Failure: test 4 LD writeback failed: state is S_FETCH
 ```
-
-If compilation fails, Vivado shows only a generic dialog. The real error is in the Tcl Console on a line starting `ERROR: [VRFC ...]`, or in `xvhdl.log`.
 
 ---
 
 ## Verification
 
-Every testbench is self-checking: it drives inputs, waits, and compares each output against an expected value with `assert ... severity failure`, so the first mismatch stops the simulation. Each output gets its own assert, so a failure message names exactly which signal was wrong.
+Every testbench is self-checking (`assert ... severity failure`). The clocked FSM and system testbenches use a `check` procedure so each cycle is one line that compares every output.
 
-### Component testbenches
+### Testbenches
 
-| Testbench | Tests | What is covered | Passes at |
+| Testbench | Checks | What is covered | Passes at |
 |---|---|---|---|
 | `tb_mux2` | 10 | Both select values over several bit patterns | 100 ns |
-| `tb_wb_mux` | 6 | All four writeback paths; output follows input changes | 60 ns |
-| `tb_alu` | 20 | Every operation, carry and borrow edge cases, zero flag, spare codes | 200 ns |
-| `tb_instr_rom` | 7 | Program words against hand-encoded hex, empty and top addresses | 70 ns |
-| `tb_data_ram` | 9 checks | Initial contents, writes, top address, blocked write, write timing | 90 ns |
-| `tb_pc` | 11 checks | Reset, increment, hold, load, load beats increment, wrap, reset priority | 120 ns |
-| `tb_flags_reg` | 9 checks | Reset, each flag loaded independently, hold, reset priority, timing | 90 ns |
-| `tb_reg_file` | 14 checks | Reset, writes to every register, blocked write, both ports on one register, reset beats write, timing | 140 ns |
-| `tb_control_unit` | 22 | Every opcode; each conditional jump both taken and not taken | 220 ns |
-| `tb_cpu` | 19 cycles | Full program using all 16 instructions, checked every cycle | 190 ns |
+| `tb_wb_mux` | 6 | All four writeback paths | 60 ns |
+| `tb_alu` | 20 | Every operation, carry/borrow edge cases, spare codes | 200 ns |
+| `tb_instr_rom` | 7 | Program words against hand-encoded hex | 70 ns |
+| `tb_data_ram` | 9 | Writes, top address, blocked write, write timing | 90 ns |
+| `tb_pc` | 11 | Reset, increment, hold, load priority, wrap | 120 ns |
+| `tb_ir` | 8 | Reset, load, hold, full 16-bit width, reset priority, load timing | 80 ns |
+| `tb_flags_reg` | 9 | Independent flag loads, hold, reset priority, timing | 90 ns |
+| `tb_reg_file` | 14 | Every register, both ports, reset priority, timing | 140 ns |
+| `tb_control_unit` | 68 | Every opcode through its full state sequence; each conditional jump both ways; reset mid-instruction | 680 ns |
+| `tb_cpu` | 64 cycles | Full program, FSM state and all debug outputs every cycle | 640 ns |
 
-Clocked testbenches use a 10 ns clock. Inputs change on the falling edge and outputs are checked on the next falling edge, so inputs are always stable around each rising edge. Timing tests also check 4 ns after a falling edge (1 ns before the rising edge) to prove a value changes **only** on the clock edge.
+In `tb_control_unit` the opcode changes only during FETCH, exactly as the IR would load it, so EXECUTE-to-next transitions are never tested with the wrong opcode.
 
 ### System test program
-
-The ROM holds a program that exercises all 16 instructions, and every conditional jump both taken and not taken:
 
 | Addr | Instruction | Hex | Effect |
 |---|---|---|---|
@@ -442,67 +455,92 @@ The ROM holds a program that exercises all 16 instructions, and every conditiona
 | 15 | `CMP R3, R2` | `BE00` | Z = 1, C = 0, R3 unchanged |
 | 16 | `JNZ 12` | `E012` | Not taken |
 | 17 | `NOP` | `0000` | |
-| 18 | `JMP 12` | `C012` | Halt (jumps to itself) |
-
-```mermaid
-flowchart TD
-    A["0-6: LDI, LDI, MOV, ADD, AND, OR, XOR<br/>XOR R2,R0 gives 00, Z = 1"] --> B{"7: JZ 09<br/>Z = 1?"}
-    B -- "yes (taken)" --> D["9-12: NOT, ST, LD, SUB<br/>SUB borrows, C = 1"]
-    B -. "no" .-> C["8: LDI R3, FF<br/>(skipped)"]
-    C -.-> D
-    D --> E{"13: JC 0F<br/>C = 1?"}
-    E -- "yes (taken)" --> G["15: CMP R3, R2<br/>FF - FF: Z = 1, C = 0"]
-    E -. "no" .-> F["14: LDI R3, 00<br/>(skipped)"]
-    F -.-> G
-    G --> H{"16: JNZ 12<br/>Z = 0?"}
-    H -- "no (falls through)" --> I["17: NOP"]
-    H -. "yes" .-> J
-    I --> J["18: JMP 12<br/>halt"]
-    J --> J
-```
-
-What each part proves:
-
-| Addresses | Proves |
-|---|---|
-| 0-6 | LDI, MOV and every ALU operation write the correct register; a zero result sets Z |
-| 7-8 | JZ taken: R3 is still 00 at address 11, so the LDI at 8 never ran |
-| 9-11 | NOT works; a value survives a round trip through RAM (ST then LD) |
-| 12-14 | SUB with borrow sets C; JC taken skips address 14 |
-| 15 | CMP sets flags without writing a register: R3 stays FF |
-| 16-18 | JNZ not taken: the PC visits 17 before halting at 18 |
+| 18 | `JMP 12` | `C012` | Halt |
 
 ### Expected trace
 
-The CPU state on each cycle, as checked by `tb_cpu`. Values are hexadecimal. `reg_a_dbg` is the rd register **going into** the instruction, and the flags are what earlier instructions left behind.
+Checked by `tb_cpu` at each falling edge. Values are hexadecimal.
 
-| Cycle | PC | Instruction | | reg_a | Z | C |
-|---|---|---|---|---|---|---|
-| 0 | 00 | `100F` | LDI R0, 0F | 00 | 0 | 0 |
-| 1 | 01 | `143C` | LDI R1, 3C | 00 | 0 | 0 |
-| 2 | 02 | `2900` | MOV R2, R1 | 00 | 0 | 0 |
-| 3 | 03 | `5800` | ADD R2, R0 | 3C | 0 | 0 |
-| 4 | 04 | `7900` | AND R2, R1 | 4B | 0 | 0 |
-| 5 | 05 | `8800` | OR R2, R0 | 08 | 0 | 0 |
-| 6 | 06 | `9800` | XOR R2, R0 | 0F | 0 | 0 |
-| 7 | 07 | `D009` | JZ 09 | 0F | **1** | 0 |
-| 8 | **09** | `A800` | NOT R2 | 00 | 1 | 0 |
-| 9 | 0A | `4820` | ST R2, 20 | FF | 0 | 0 |
-| 10 | 0B | `3C20` | LD R3, 20 | **00** | 0 | 0 |
-| 11 | 0C | `6100` | SUB R0, R1 | 0F | 0 | 0 |
-| 12 | 0D | `F00F` | JC 0F | D3 | 0 | **1** |
-| 13 | **0F** | `BE00` | CMP R3, R2 | **FF** | 0 | 1 |
-| 14 | 10 | `E012` | JNZ 12 | D3 | **1** | **0** |
-| 15 | **11** | `0000` | NOP | D3 | 1 | 0 |
-| 16-18 | 12 | `C012` | JMP 12 (halted) | D3 | 1 | 0 |
+How to read it:
+- **PC runs one ahead after FETCH**: it increments in FETCH, so DECODE onwards shows the next address.
+- **IR changes only at the end of FETCH**; cycle 0 shows `0000` from reset.
+- **Results appear one state later**: a WRITEBACK's value is visible at the next FETCH; flags loaded in EXECUTE are visible from the next state.
+- **The halt** cycles FETCH, DECODE, EXECUTE on `JMP 12`, so the PC alternates 12, 13, 13.
 
-The bold values are the key checks: jumps landing at 09 and 0F, R3 proving the skipped instructions never ran and that LD worked, the flags changing, and the fall-through to 11.
+| Cycle | State | PC | IR | Instruction in IR | reg_a | Z | C |
+|---|---|---|---|---|---|---|---|
+| 0 | FETCH | 00 | `0000` | (reset) | 00 | 0 | 0 |
+| 1 | DECODE | 01 | `100F` | LDI R0, 0F | 00 | 0 | 0 |
+| 2 | WRITEBACK | 01 | `100F` | LDI R0, 0F | 00 | 0 | 0 |
+| 3 | FETCH | 01 | `100F` | LDI R0, 0F | 0F | 0 | 0 |
+| 4 | DECODE | 02 | `143C` | LDI R1, 3C | 00 | 0 | 0 |
+| 5 | WRITEBACK | 02 | `143C` | LDI R1, 3C | 00 | 0 | 0 |
+| 6 | FETCH | 02 | `143C` | LDI R1, 3C | 3C | 0 | 0 |
+| 7 | DECODE | 03 | `2900` | MOV R2, R1 | 00 | 0 | 0 |
+| 8 | WRITEBACK | 03 | `2900` | MOV R2, R1 | 00 | 0 | 0 |
+| 9 | FETCH | 03 | `2900` | MOV R2, R1 | 3C | 0 | 0 |
+| 10 | DECODE | 04 | `5800` | ADD R2, R0 | 3C | 0 | 0 |
+| 11 | EXECUTE | 04 | `5800` | ADD R2, R0 | 3C | 0 | 0 |
+| 12 | WRITEBACK | 04 | `5800` | ADD R2, R0 | 3C | 0 | 0 |
+| 13 | FETCH | 04 | `5800` | ADD R2, R0 | 4B | 0 | 0 |
+| 14 | DECODE | 05 | `7900` | AND R2, R1 | 4B | 0 | 0 |
+| 15 | EXECUTE | 05 | `7900` | AND R2, R1 | 4B | 0 | 0 |
+| 16 | WRITEBACK | 05 | `7900` | AND R2, R1 | 4B | 0 | 0 |
+| 17 | FETCH | 05 | `7900` | AND R2, R1 | 08 | 0 | 0 |
+| 18 | DECODE | 06 | `8800` | OR R2, R0 | 08 | 0 | 0 |
+| 19 | EXECUTE | 06 | `8800` | OR R2, R0 | 08 | 0 | 0 |
+| 20 | WRITEBACK | 06 | `8800` | OR R2, R0 | 08 | 0 | 0 |
+| 21 | FETCH | 06 | `8800` | OR R2, R0 | 0F | 0 | 0 |
+| 22 | DECODE | 07 | `9800` | XOR R2, R0 | 0F | 0 | 0 |
+| 23 | EXECUTE | 07 | `9800` | XOR R2, R0 | 0F | 0 | 0 |
+| 24 | WRITEBACK | 07 | `9800` | XOR R2, R0 | 0F | 1 | 0 |
+| 25 | FETCH | 07 | `9800` | XOR R2, R0 | 00 | 1 | 0 |
+| 26 | DECODE | 08 | `D009` | JZ 09 | 0F | 1 | 0 |
+| 27 | EXECUTE | 08 | `D009` | JZ 09 | 0F | 1 | 0 |
+| 28 | FETCH | 09 | `D009` | JZ 09 | 0F | 1 | 0 |
+| 29 | DECODE | 0A | `A800` | NOT R2 | 00 | 1 | 0 |
+| 30 | EXECUTE | 0A | `A800` | NOT R2 | 00 | 1 | 0 |
+| 31 | WRITEBACK | 0A | `A800` | NOT R2 | 00 | 0 | 0 |
+| 32 | FETCH | 0A | `A800` | NOT R2 | FF | 0 | 0 |
+| 33 | DECODE | 0B | `4820` | ST R2, 20 | FF | 0 | 0 |
+| 34 | EXECUTE | 0B | `4820` | ST R2, 20 | FF | 0 | 0 |
+| 35 | FETCH | 0B | `4820` | ST R2, 20 | FF | 0 | 0 |
+| 36 | DECODE | 0C | `3C20` | LD R3, 20 | 00 | 0 | 0 |
+| 37 | EXECUTE | 0C | `3C20` | LD R3, 20 | 00 | 0 | 0 |
+| 38 | WRITEBACK | 0C | `3C20` | LD R3, 20 | 00 | 0 | 0 |
+| 39 | FETCH | 0C | `3C20` | LD R3, 20 | FF | 0 | 0 |
+| 40 | DECODE | 0D | `6100` | SUB R0, R1 | 0F | 0 | 0 |
+| 41 | EXECUTE | 0D | `6100` | SUB R0, R1 | 0F | 0 | 0 |
+| 42 | WRITEBACK | 0D | `6100` | SUB R0, R1 | 0F | 0 | 1 |
+| 43 | FETCH | 0D | `6100` | SUB R0, R1 | D3 | 0 | 1 |
+| 44 | DECODE | 0E | `F00F` | JC 0F | D3 | 0 | 1 |
+| 45 | EXECUTE | 0E | `F00F` | JC 0F | D3 | 0 | 1 |
+| 46 | FETCH | 0F | `F00F` | JC 0F | D3 | 0 | 1 |
+| 47 | DECODE | 10 | `BE00` | CMP R3, R2 | FF | 0 | 1 |
+| 48 | EXECUTE | 10 | `BE00` | CMP R3, R2 | FF | 0 | 1 |
+| 49 | FETCH | 10 | `BE00` | CMP R3, R2 | FF | 1 | 0 |
+| 50 | DECODE | 11 | `E012` | JNZ 12 | D3 | 1 | 0 |
+| 51 | EXECUTE | 11 | `E012` | JNZ 12 | D3 | 1 | 0 |
+| 52 | FETCH | 11 | `E012` | JNZ 12 | D3 | 1 | 0 |
+| 53 | DECODE | 12 | `0000` | NOP | D3 | 1 | 0 |
+| 54 | EXECUTE | 12 | `0000` | NOP | D3 | 1 | 0 |
+| 55 | FETCH | 12 | `0000` | NOP | D3 | 1 | 0 |
+| 56 | DECODE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 57 | EXECUTE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 58 | FETCH | 12 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 59 | DECODE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 60 | EXECUTE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 61 | FETCH | 12 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 62 | DECODE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+| 63 | EXECUTE | 13 | `C012` | JMP 12 | D3 | 1 | 0 |
+
+Key checks: register results at the FETCH after each WRITEBACK (cycles 3, 6, 9, 13...), the jumps landing at 09 (cycle 28) and 0F (cycle 46), R3 still 00 at cycle 36 (the skipped LDI never ran) and FF at cycle 47 (LD worked), JNZ falling through to 11 (cycle 52), and the halt loop from cycle 56.
 
 ---
 
 ## Writing your own program
 
-Programs live in the `rom_data` constant in `instr_rom.vhd`. Each entry is built from `cpu_pkg` constants in the order `opcode & rd & rs & imm`:
+Programs live in the `rom_data` constant in `instr_rom.vhd`, built from `cpu_pkg` constants as `opcode & rd & rs & imm`:
 
 ```vhdl
 constant rom_data : rom_type := (
@@ -515,10 +553,10 @@ constant rom_data : rom_type := (
 );
 ```
 
-- Put `REG0` and `x"00"` in fields an instruction does not use.
+- Put `REG0` and `x"00"` in unused fields.
 - Jump targets in `imm` are hexadecimal; array indices on the left are decimal.
-- End the program with a `JMP` to its own address so the CPU does not run into empty memory.
-- After changing the program, update the expected values in `tb_instr_rom.vhd` and the expected trace in `tb_cpu.vhd`.
+- End with a `JMP` to its own address.
+- After changing the program, update `tb_instr_rom.vhd` and the expected trace in `tb_cpu.vhd`. Remember each instruction now takes 3 or 4 cycles.
 
 ---
 
@@ -526,18 +564,17 @@ constant rom_data : rom_type := (
 
 - No stack, subroutine calls or interrupts.
 - No shift, rotate, increment or decrement instructions.
-- Only direct addressing for LD/ST (the address is a constant in the instruction).
+- Only direct addressing for LD/ST.
 - Unsigned arithmetic only: no overflow or negative flag.
-- The program is fixed in `instr_rom.vhd`; changing it means editing VHDL.
-- Designed for behavioral simulation. Real FPGA block RAM reads are synchronous, so running on hardware would need a multi-cycle or pipelined design, or distributed (LUT) RAM.
+- The program is fixed in `instr_rom.vhd`.
+- Memories still read asynchronously. FPGA block RAM reads are synchronous; supporting them needs an extra state or holding registers.
 
 ---
 
 ## Future work
 
-- **Load the ROM from a text file** at simulation start, so programs can change without editing VHDL.
+- **Synchronous memories** (block-RAM style), with A/B/ALUOut holding registers.
+- **Shared instruction/data memory** (von Neumann), which the multi-cycle structure makes possible.
+- **Load the ROM from a text file** at simulation start.
 - **Shift and INC/DEC instructions**, using the spare ALU codes `110` and `111`.
-- **Register-indirect addressing** for LD/ST (address taken from a register).
 - **Stack pointer** with PUSH, POP, CALL and RET.
-- **Multi-cycle version** with a finite-state-machine control unit. *In progress on the `multicycle` branch.*
-

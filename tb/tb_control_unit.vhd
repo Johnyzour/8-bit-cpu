@@ -1,8 +1,12 @@
 --------------------------------------------------------------------------------
 -- File        : tb_control_unit.vhd
--- Description : Self-checking testbench for control_unit. 22 tests: every
---               opcode, and each conditional jump both taken and not taken.
--- Notes       : Prints "all tests completed and passed" at 220 ns.
+-- Description : Self-checking testbench for the multi-cycle control FSM.
+--               Steps every opcode through its state sequence (FETCH, DECODE,
+--               EXECUTE, WRITEBACK as applicable), checking the state and all
+--               control outputs in each state. Covers each conditional jump
+--               taken and not taken, and reset in the middle of an instruction.
+-- Notes       : The opcode changes only during FETCH, as the IR would load it.
+--               Prints "all tests completed and passed" at 680 ns.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -13,6 +17,8 @@ entity tb_control_unit is
 end entity tb_control_unit;
 
 architecture sim of tb_control_unit is
+    signal tb_clk       : std_logic := '0';
+    signal tb_rst       : std_logic := '1';
     signal tb_opcode    : std_logic_vector (3 downto 0) := (others => '0');
     signal tb_z_flag    : std_logic := '0';
     signal tb_c_flag    : std_logic := '0';
@@ -24,9 +30,13 @@ architecture sim of tb_control_unit is
     signal tb_c_load    : std_logic;
     signal tb_pc_load   : std_logic;
     signal tb_pc_inc    : std_logic;
+    signal tb_ir_load   : std_logic;
+    signal tb_state_out : state_t;    
 begin
     uut : entity work.control_unit
     port map (
+        clk       => tb_clk,
+        rst       => tb_rst,
         opcode    => tb_opcode,
         z_flag    => tb_z_flag,
         c_flag    => tb_c_flag,
@@ -37,318 +47,206 @@ begin
         z_load    => tb_z_load,
         c_load    => tb_c_load,
         pc_load   => tb_pc_load,
-        pc_inc    => tb_pc_inc
+        pc_inc    => tb_pc_inc,
+        ir_load   => tb_ir_load,
+        state_out => tb_state_out
     );
-
-    stim_proc : process
+    
+    clk_proc : process
     begin
-        --test1: NOP
-        tb_opcode <= OP_NOP;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 1 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 1 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 1 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 1 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 1 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 1 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 1 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 1 failed: pc_inc"    severity failure;
+        tb_clk <= '0';
+        wait for 5 ns;
+        tb_clk <= '1';
+        wait for 5 ns;
+    end process clk_proc;
+        
+    stim_proc : process
+        -- core check: compares the state and all 9 control outputs
+        procedure check (
+            name    : in string;
+            st      : in state_t;
+            ir_ld   : in std_logic;
+            pc_i    : in std_logic;
+            pc_l    : in std_logic;
+            reg_we  : in std_logic;
+            ram_we  : in std_logic;
+            z_ld    : in std_logic;
+            c_ld    : in std_logic;
+            alu     : in std_logic_vector (2 downto 0);
+            wb      : in std_logic_vector (1 downto 0);
+            chk_sel : in boolean
+        ) is
+        begin
+            assert(tb_state_out = st)     report name & " failed: state is " & state_t'image(tb_state_out) severity failure;
+            assert(tb_ir_load = ir_ld)    report name & " failed: ir_load"   severity failure;
+            assert(tb_pc_inc = pc_i)      report name & " failed: pc_inc"    severity failure;
+            assert(tb_pc_load = pc_l)     report name & " failed: pc_load"   severity failure;
+            assert(tb_reg_wr_en = reg_we) report name & " failed: reg_wr_en" severity failure;
+            assert(tb_ram_wr_en = ram_we) report name & " failed: ram_wr_en" severity failure;
+            assert(tb_z_load = z_ld)      report name & " failed: z_load"    severity failure;
+            assert(tb_c_load = c_ld)      report name & " failed: c_load"    severity failure;
+            if chk_sel then
+                assert(tb_alu_sel = alu)  report name & " failed: alu_sel"   severity failure;
+                assert(tb_wb_sel = wb)    report name & " failed: wb_sel"    severity failure;
+            end if;
+        end procedure check;
 
-        --test2: LDI
-        tb_opcode <= OP_LDI;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 2 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_IMM)   report "test 2 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 2 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 2 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 2 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 2 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 2 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 2 failed: pc_inc"    severity failure;
+        -- one wrapper per state: only the values that vary are passed in
+        procedure fetch (name : in string) is
+        begin
+            check(name & " fetch", S_FETCH, '1', '1', '0', '0', '0', '0', '0', ALU_ADD, WB_ALU, false);
+        end procedure fetch;
 
-        --test3: MOV
-        tb_opcode <= OP_MOV;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 3 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_REG)   report "test 3 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 3 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 3 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 3 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 3 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 3 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 3 failed: pc_inc"    severity failure;
+        procedure decode (name : in string; alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+        begin
+            check(name & " decode", S_DECODE, '0', '0', '0', '0', '0', '0', '0', alu, wb, true);
+        end procedure decode;
 
-        --test4: LD
-        tb_opcode <= OP_LD;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 4 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_RAM)   report "test 4 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 4 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 4 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 4 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 4 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 4 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 4 failed: pc_inc"    severity failure;
+        procedure execute (name : in string; pc_l, ram_we, z_ld, c_ld : in std_logic;
+                           alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+        begin
+            check(name & " execute", S_EXECUTE, '0', '0', pc_l, '0', ram_we, z_ld, c_ld, alu, wb, true);
+        end procedure execute;
 
-        --test5: ST
-        tb_opcode <= OP_ST;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 5 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 5 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 5 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '1')   report "test 5 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 5 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 5 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 5 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 5 failed: pc_inc"    severity failure;
+        procedure writeback (name : in string; alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+        begin
+            check(name & " writeback", S_WRITEBACK, '0', '0', '0', '1', '0', '0', '0', alu, wb, true);
+        end procedure writeback;
 
-        --test6: ADD
-        tb_opcode <= OP_ADD;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 6 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 6 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 6 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 6 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 6 failed: z_load"    severity failure;
-        assert(tb_c_load = '1')      report "test 6 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 6 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 6 failed: pc_inc"    severity failure;
+    begin
+        -- reset was applied at the first rising edge
+        wait until falling_edge(tb_clk);
+        tb_rst <= '0';
+        fetch("reset");
 
-        --test7: SUB
-        tb_opcode <= OP_SUB;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 7 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 7 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_SUB) report "test 7 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 7 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 7 failed: z_load"    severity failure;
-        assert(tb_c_load = '1')      report "test 7 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 7 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 7 failed: pc_inc"    severity failure;
+        --test1: NOP (F D E)
+        tb_opcode <= OP_NOP; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 1 NOP", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 1 NOP", '0', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 1 NOP");
 
-        --test8: AND
-        tb_opcode <= OP_AND;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 8 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 8 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_AND) report "test 8 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 8 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 8 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 8 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 8 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 8 failed: pc_inc"    severity failure;
+        --test2: LDI (F D W, skips EXECUTE)
+        tb_opcode <= OP_LDI; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 2 LDI", ALU_ADD, WB_IMM);
+        wait until falling_edge(tb_clk); writeback("test 2 LDI", ALU_ADD, WB_IMM);
+        wait until falling_edge(tb_clk); fetch("test 2 LDI");
 
-        --test9: OR
-        tb_opcode <= OP_OR;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 9 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 9 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_OR)  report "test 9 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 9 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 9 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 9 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 9 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 9 failed: pc_inc"    severity failure;
+        --test3: MOV (F D W, skips EXECUTE)
+        tb_opcode <= OP_MOV; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 3 MOV", ALU_ADD, WB_REG);
+        wait until falling_edge(tb_clk); writeback("test 3 MOV", ALU_ADD, WB_REG);
+        wait until falling_edge(tb_clk); fetch("test 3 MOV");
 
-        --test10: XOR
-        tb_opcode <= OP_XOR;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 10 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 10 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_XOR) report "test 10 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 10 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 10 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 10 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 10 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 10 failed: pc_inc"    severity failure;
+        --test4: LD (F D E W)
+        tb_opcode <= OP_LD; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 4 LD", ALU_ADD, WB_RAM);
+        wait until falling_edge(tb_clk); execute("test 4 LD", '0', '0', '0', '0', ALU_ADD, WB_RAM);
+        wait until falling_edge(tb_clk); writeback("test 4 LD", ALU_ADD, WB_RAM);
+        wait until falling_edge(tb_clk); fetch("test 4 LD");
 
-        --test11: NOT
-        tb_opcode <= OP_NOT;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 11 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 11 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_NOT) report "test 11 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 11 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 11 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 11 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 11 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 11 failed: pc_inc"    severity failure;
+        --test5: ST (F D E)
+        tb_opcode <= OP_ST; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 5 ST", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 5 ST", '0', '1', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 5 ST");
 
-        --test12: CMP (SUB without writeback)
-        tb_opcode <= OP_CMP;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 12 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 12 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_SUB) report "test 12 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 12 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 12 failed: z_load"    severity failure;
-        assert(tb_c_load = '1')      report "test 12 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 12 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 12 failed: pc_inc"    severity failure;
+        --test6: ADD (F D E W)
+        tb_opcode <= OP_ADD; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 6 ADD", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 6 ADD", '0', '0', '1', '1', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 6 ADD", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 6 ADD");
 
-        --test13: JMP always jumps
-        tb_opcode <= OP_JMP;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 13 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 13 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 13 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 13 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 13 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 13 failed: c_load"    severity failure;
-        assert(tb_pc_load = '1')     report "test 13 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 13 failed: pc_inc"    severity failure;
+        --test7: SUB (F D E W)
+        tb_opcode <= OP_SUB; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 7 SUB", ALU_SUB, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 7 SUB", '0', '0', '1', '1', ALU_SUB, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 7 SUB", ALU_SUB, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 7 SUB");
 
-        --test14: JZ not taken (z = 0)
-        tb_opcode <= OP_JZ;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 14 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 14 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 14 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 14 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 14 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 14 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 14 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 14 failed: pc_inc"    severity failure;
+        --test8: AND (F D E W, Z only)
+        tb_opcode <= OP_AND; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 8 AND", ALU_AND, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 8 AND", '0', '0', '1', '0', ALU_AND, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 8 AND", ALU_AND, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 8 AND");
 
-        --test15: JZ taken (z = 1)
-        tb_opcode <= OP_JZ;
-        tb_z_flag <= '1';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 15 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 15 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 15 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 15 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 15 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 15 failed: c_load"    severity failure;
-        assert(tb_pc_load = '1')     report "test 15 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 15 failed: pc_inc"    severity failure;
+        --test9: OR (F D E W, Z only)
+        tb_opcode <= OP_OR; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 9 OR", ALU_OR, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 9 OR", '0', '0', '1', '0', ALU_OR, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 9 OR", ALU_OR, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 9 OR");
+
+        --test10: XOR (F D E W, Z only)
+        tb_opcode <= OP_XOR; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 10 XOR", ALU_XOR, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 10 XOR", '0', '0', '1', '0', ALU_XOR, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 10 XOR", ALU_XOR, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 10 XOR");
+
+        --test11: NOT (F D E W, Z only)
+        tb_opcode <= OP_NOT; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 11 NOT", ALU_NOT, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 11 NOT", '0', '0', '1', '0', ALU_NOT, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 11 NOT", ALU_NOT, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 11 NOT");
+
+        --test12: CMP (F D E, flags but no writeback)
+        tb_opcode <= OP_CMP; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 12 CMP", ALU_SUB, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 12 CMP", '0', '0', '1', '1', ALU_SUB, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 12 CMP");
+
+        --test13: JMP (F D E, always taken)
+        tb_opcode <= OP_JMP; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 13 JMP", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 13 JMP", '1', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 13 JMP");
+
+        --test14: JZ taken (z = 1)
+        tb_opcode <= OP_JZ; tb_z_flag <= '1'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 14 JZ", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 14 JZ", '1', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 14 JZ");
+
+        --test15: JZ not taken (z = 0)
+        tb_opcode <= OP_JZ; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 15 JZ", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 15 JZ", '0', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 15 JZ");
 
         --test16: JNZ taken (z = 0)
-        tb_opcode <= OP_JNZ;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 16 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 16 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 16 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 16 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 16 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 16 failed: c_load"    severity failure;
-        assert(tb_pc_load = '1')     report "test 16 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 16 failed: pc_inc"    severity failure;
+        tb_opcode <= OP_JNZ; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 16 JNZ", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 16 JNZ", '1', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 16 JNZ");
 
         --test17: JNZ not taken (z = 1)
-        tb_opcode <= OP_JNZ;
-        tb_z_flag <= '1';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 17 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 17 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 17 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 17 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 17 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 17 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 17 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 17 failed: pc_inc"    severity failure;
+        tb_opcode <= OP_JNZ; tb_z_flag <= '1'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 17 JNZ", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 17 JNZ", '0', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 17 JNZ");
 
-        --test18: JC not taken (c = 0)
-        tb_opcode <= OP_JC;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 18 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 18 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 18 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 18 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 18 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 18 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 18 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 18 failed: pc_inc"    severity failure;
+        --test18: JC taken (c = 1)
+        tb_opcode <= OP_JC; tb_z_flag <= '0'; tb_c_flag <= '1';
+        wait until falling_edge(tb_clk); decode("test 18 JC", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 18 JC", '1', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 18 JC");
 
-        --test19: JC taken (c = 1)
-        tb_opcode <= OP_JC;
-        tb_z_flag <= '0';
-        tb_c_flag <= '1';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 19 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 19 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 19 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 19 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 19 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 19 failed: c_load"    severity failure;
-        assert(tb_pc_load = '1')     report "test 19 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 19 failed: pc_inc"    severity failure;
+        --test19: JC ignores z (z = 1, c = 0)
+        tb_opcode <= OP_JC; tb_z_flag <= '1'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 19 JC", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 19 JC", '0', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 19 JC");
 
-        --test20: JC ignores z (z = 1, c = 0)
-        tb_opcode <= OP_JC;
-        tb_z_flag <= '1';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 20 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 20 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 20 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 20 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 20 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 20 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 20 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 20 failed: pc_inc"    severity failure;
-
-        --test21: ADD with both flags set (flags must not affect it)
-        tb_opcode <= OP_ADD;
-        tb_z_flag <= '1';
-        tb_c_flag <= '1';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '1')   report "test 21 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 21 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 21 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 21 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '1')      report "test 21 failed: z_load"    severity failure;
-        assert(tb_c_load = '1')      report "test 21 failed: c_load"    severity failure;
-        assert(tb_pc_load = '0')     report "test 21 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 21 failed: pc_inc"    severity failure;
-
-        --test22: back to JMP, outputs must change
-        tb_opcode <= OP_JMP;
-        tb_z_flag <= '0';
-        tb_c_flag <= '0';
-        wait for 10 ns;
-        assert(tb_reg_wr_en = '0')   report "test 22 failed: reg_wr_en" severity failure;
-        assert(tb_wb_sel = WB_ALU)   report "test 22 failed: wb_sel"    severity failure;
-        assert(tb_alu_sel = ALU_ADD) report "test 22 failed: alu_sel"   severity failure;
-        assert(tb_ram_wr_en = '0')   report "test 22 failed: ram_wr_en" severity failure;
-        assert(tb_z_load = '0')      report "test 22 failed: z_load"    severity failure;
-        assert(tb_c_load = '0')      report "test 22 failed: c_load"    severity failure;
-        assert(tb_pc_load = '1')     report "test 22 failed: pc_load"   severity failure;
-        assert(tb_pc_inc = '1')      report "test 22 failed: pc_inc"    severity failure;
+        --test20: reset during DECODE returns to FETCH, then resumes
+        tb_opcode <= OP_ADD; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 20 ADD", ALU_ADD, WB_ALU);
+        tb_rst <= '1';
+        wait until falling_edge(tb_clk); fetch("test 20 reset");
+        tb_rst <= '0';
+        wait until falling_edge(tb_clk); decode("test 20 resume", ALU_ADD, WB_ALU);
 
         report "all tests completed and passed" severity note;
         wait;
