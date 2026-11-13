@@ -1,0 +1,12 @@
+.Xil/
+*.jou
+*.log
+*.str
+*.cache/
+*.runs/
+*.sim/
+*.hw/
+*.ip_user_files/
+xsim.dir/
+*.wdb
+*.wcfg
