@@ -1,9 +1,9 @@
 --------------------------------------------------------------------------------
 -- File        : ir.vhd
--- Description : 16-bit instruction register. Holds the current instruction
+-- Description : 24-bit instruction register. Holds the current instruction
 --               while the multi-cycle control unit steps through its states.
 -- Notes       : Loads data_in on the rising edge when ir_load = 1 (FETCH
---               state). Synchronous reset clears it to 0000 (NOP) and takes
+--               state). Synchronous reset clears it to 000000 (NOP) and takes
 --               priority over the load.
 --------------------------------------------------------------------------------
 
@@ -15,8 +15,8 @@ entity ir is
         clk      : in  std_logic;
         rst      : in  std_logic;
         ir_load  : in  std_logic; 
-        data_in  : in  std_logic_vector (15 downto 0);
-        data_out : out std_logic_vector (15 downto 0)
+        data_in  : in  std_logic_vector (23 downto 0);
+        data_out : out std_logic_vector (23 downto 0)
     );
 end entity ir;
 
@@ -27,7 +27,7 @@ begin
     begin
         if rising_edge(clk) then
             if rst = '1' then
-                data_out <= x"0000";
+                data_out <= x"000000";
             elsif ir_load = '1' then
                 data_out <= data_in;
             end if;

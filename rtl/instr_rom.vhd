@@ -1,9 +1,9 @@
 --------------------------------------------------------------------------------
 -- File        : instr_rom.vhd
--- Description : 256 x 16-bit instruction ROM holding the program.
+-- Description : 256 x 24-bit instruction ROM holding the program.
 -- Notes       : Asynchronous read. To change the program, edit rom_data; each
 --               entry is built as opcode & rd & rs & imm from cpu_pkg constants.
---               Unused addresses hold 0000 (NOP).
+--               Unused addresses hold 000000 (NOP).
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -14,12 +14,12 @@ use work.cpu_pkg.all;
 entity instr_rom is
     port (
         addr  : in  std_logic_vector (7 downto 0);
-        instr : out std_logic_vector (15 downto 0)            
+        instr : out std_logic_vector (23 downto 0)
     ); 
 end entity instr_rom;
 
 architecture rtl of instr_rom is
-    type rom_type is array (0 to 255) of std_logic_vector (15 downto 0);
+    type rom_type is array (0 to 255) of std_logic_vector (23 downto 0);
     constant rom_data : rom_type := (
         0  => OP_LDI & REG0 & REG0 & x"0F",   -- LDI R0, 0F
         1  => OP_LDI & REG1 & REG0 & x"3C",   -- LDI R1, 3C
@@ -37,10 +37,14 @@ architecture rtl of instr_rom is
         13 => OP_JC  & REG0 & REG0 & x"0F",   -- JC 15           taken
         14 => OP_LDI & REG3 & REG0 & x"00",   -- LDI R3, 00      must be skipped
         15 => OP_CMP & REG3 & REG2 & x"00",   -- CMP R3, R2      Z = 1, R3 unchanged
-        16 => OP_JNZ & REG0 & REG0 & x"12",   -- JNZ 18          not taken
+        16 => OP_JNZ & REG0 & REG0 & x"16",   -- JNZ 22          not taken
         17 => OP_NOP & REG0 & REG0 & x"00",   -- NOP
-        18 => OP_JMP & REG0 & REG0 & x"12",   -- JMP 18 (halt)
-        others => x"0000"
+        18 => OP_INC & REG2 & REG0 & x"00",   -- INC R2          R2 = 00, Z = 1, C = 1
+        19 => OP_DEC & REG1 & REG0 & x"00",   -- DEC R1          R1 = 3B
+        20 => OP_SHL & REG0 & REG0 & x"00",   -- SHL R0          R0 = A6, C = 1
+        21 => OP_SHR & REG0 & REG0 & x"00",   -- SHR R0          R0 = 53, C = 0
+        22 => OP_JMP & REG0 & REG0 & x"16",   -- JMP 22 (halt)
+        others => x"000000"
     );
     
 begin

@@ -1,15 +1,19 @@
 --------------------------------------------------------------------------------
 -- File        : control_unit.vhd
--- Description : Multi-cycle control FSM. Steps each instruction through
---               FETCH, DECODE, EXECUTE and WRITEBACK and drives the datapath
---               control signals from the state, opcode and stored Z/C flags.
--- Notes       : Three processes: state register (clocked), next-state logic
---               and output logic (both combinational, defaults first so no
---               latches are inferred).
---               Selects (alu_sel, wb_sel) depend on the opcode only; enables
---               depend on the state. LDI/MOV skip EXECUTE; ALU ops and LD use
---               all four states; NOP, ST, CMP and jumps skip WRITEBACK.
---               Synchronous reset returns the FSM to FETCH.
+-- Description : Multicycle control unit. Moore FSM with four states
+--               (FETCH, DECODE, EXECUTE, WRITEBACK) that drives the datapath
+--               control signals from the 8-bit opcode, the current state and
+--               the Z/C flags.
+-- Notes       : Three processes: state register, next-state logic, output
+--               logic. Selects (alu_sel, wb_sel) depend on the opcode only;
+--               enables depend on the state.
+--               FETCH loads the IR and increments the PC. LDI and MOV skip
+--               EXECUTE. NOP, ST, CMP and the jumps skip WRITEBACK.
+--               ALU ops (ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC) and
+--               LD take all four states. ADD, SUB, CMP, SHL, SHR, INC and DEC
+--               load Z and C; AND, OR, XOR and NOT load Z only.
+--               Unused opcodes (14-FF) behave as NOP. Synchronous active-high
+--               reset returns to FETCH.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -17,15 +21,15 @@ use ieee.std_logic_1164.all;
 use work.cpu_pkg.all;
 
 entity control_unit is
-    port ( 
+    port (
         clk       : in  std_logic;
         rst       : in  std_logic;    
-        opcode    : in  std_logic_vector (3 downto 0);
+        opcode    : in  std_logic_vector (7 downto 0);
         z_flag    : in  std_logic;
         c_flag    : in  std_logic;
         reg_wr_en : out std_logic;
         wb_sel    : out std_logic_vector (1 downto 0);
-        alu_sel   : out std_logic_vector (2 downto 0);
+        alu_sel   : out std_logic_vector (3 downto 0);
         ram_wr_en : out std_logic;
         z_load    : out std_logic;
         c_load    : out std_logic;
@@ -65,7 +69,7 @@ begin
                 end if;
             when S_EXECUTE =>
                 case opcode is
-                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD =>
+                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
                         next_state <= S_WRITEBACK;
                     when others =>
                         next_state <= S_FETCH;
@@ -104,6 +108,14 @@ begin
                 wb_sel <= WB_REG;
             when OP_LD =>
                 wb_sel <= WB_RAM;
+            when OP_SHL =>
+                alu_sel <= ALU_SHL;
+            when OP_SHR =>
+                alu_sel <= ALU_SHR;
+            when OP_INC =>
+                alu_sel <= ALU_INC;
+            when OP_DEC =>
+                alu_sel <= ALU_DEC;
             when others =>
                 null;
         end case;
@@ -116,7 +128,7 @@ begin
                 null;
             when S_EXECUTE =>
                 case opcode is
-                    when OP_ADD | OP_SUB | OP_CMP =>
+                    when OP_ADD | OP_SUB | OP_CMP | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
                         z_load <= '1';
                         c_load <= '1';
                     when OP_AND | OP_OR | OP_XOR | OP_NOT =>

@@ -4,9 +4,10 @@
 --               Steps every opcode through its state sequence (FETCH, DECODE,
 --               EXECUTE, WRITEBACK as applicable), checking the state and all
 --               control outputs in each state. Covers each conditional jump
---               taken and not taken, and reset in the middle of an instruction.
+--               taken and not taken, an unused opcode (treated as NOP), and
+--               reset in the middle of an instruction.
 -- Notes       : The opcode changes only during FETCH, as the IR would load it.
---               Prints "all tests completed and passed" at 680 ns.
+--               Prints "all tests completed and passed" at 870 ns.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -19,12 +20,12 @@ end entity tb_control_unit;
 architecture sim of tb_control_unit is
     signal tb_clk       : std_logic := '0';
     signal tb_rst       : std_logic := '1';
-    signal tb_opcode    : std_logic_vector (3 downto 0) := (others => '0');
+    signal tb_opcode    : std_logic_vector (7 downto 0) := (others => '0');
     signal tb_z_flag    : std_logic := '0';
     signal tb_c_flag    : std_logic := '0';
     signal tb_reg_wr_en : std_logic;
     signal tb_wb_sel    : std_logic_vector (1 downto 0);
-    signal tb_alu_sel   : std_logic_vector (2 downto 0);
+    signal tb_alu_sel   : std_logic_vector (3 downto 0);
     signal tb_ram_wr_en : std_logic;
     signal tb_z_load    : std_logic;
     signal tb_c_load    : std_logic;
@@ -72,7 +73,7 @@ begin
             ram_we  : in std_logic;
             z_ld    : in std_logic;
             c_ld    : in std_logic;
-            alu     : in std_logic_vector (2 downto 0);
+            alu     : in std_logic_vector (3 downto 0);
             wb      : in std_logic_vector (1 downto 0);
             chk_sel : in boolean
         ) is
@@ -97,18 +98,18 @@ begin
             check(name & " fetch", S_FETCH, '1', '1', '0', '0', '0', '0', '0', ALU_ADD, WB_ALU, false);
         end procedure fetch;
 
-        procedure decode (name : in string; alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+        procedure decode (name : in string; alu : in std_logic_vector (3 downto 0); wb : in std_logic_vector (1 downto 0)) is
         begin
             check(name & " decode", S_DECODE, '0', '0', '0', '0', '0', '0', '0', alu, wb, true);
         end procedure decode;
 
         procedure execute (name : in string; pc_l, ram_we, z_ld, c_ld : in std_logic;
-                           alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+                           alu : in std_logic_vector (3 downto 0); wb : in std_logic_vector (1 downto 0)) is
         begin
             check(name & " execute", S_EXECUTE, '0', '0', pc_l, '0', ram_we, z_ld, c_ld, alu, wb, true);
         end procedure execute;
 
-        procedure writeback (name : in string; alu : in std_logic_vector (2 downto 0); wb : in std_logic_vector (1 downto 0)) is
+        procedure writeback (name : in string; alu : in std_logic_vector (3 downto 0); wb : in std_logic_vector (1 downto 0)) is
         begin
             check(name & " writeback", S_WRITEBACK, '0', '0', '0', '1', '0', '0', '0', alu, wb, true);
         end procedure writeback;
@@ -240,14 +241,48 @@ begin
         wait until falling_edge(tb_clk); execute("test 19 JC", '0', '0', '0', '0', ALU_ADD, WB_ALU);
         wait until falling_edge(tb_clk); fetch("test 19 JC");
 
-        --test20: reset during DECODE returns to FETCH, then resumes
-        tb_opcode <= OP_ADD; tb_z_flag <= '0'; tb_c_flag <= '0';
-        wait until falling_edge(tb_clk); decode("test 20 ADD", ALU_ADD, WB_ALU);
-        tb_rst <= '1';
-        wait until falling_edge(tb_clk); fetch("test 20 reset");
-        tb_rst <= '0';
-        wait until falling_edge(tb_clk); decode("test 20 resume", ALU_ADD, WB_ALU);
+        --test20: SHL (F D E W, Z and C)
+        tb_opcode <= OP_SHL; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 20 SHL", ALU_SHL, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 20 SHL", '0', '0', '1', '1', ALU_SHL, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 20 SHL", ALU_SHL, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 20 SHL");
 
+        --test21: SHR (F D E W, Z and C)
+        tb_opcode <= OP_SHR; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 21 SHR", ALU_SHR, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 21 SHR", '0', '0', '1', '1', ALU_SHR, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 21 SHR", ALU_SHR, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 21 SHR");
+
+        --test22: INC (F D E W, Z and C)
+        tb_opcode <= OP_INC; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 22 INC", ALU_INC, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 22 INC", '0', '0', '1', '1', ALU_INC, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 22 INC", ALU_INC, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 22 INC");
+
+        --test23: DEC (F D E W, Z and C)
+        tb_opcode <= OP_DEC; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 23 DEC", ALU_DEC, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 23 DEC", '0', '0', '1', '1', ALU_DEC, WB_ALU);
+        wait until falling_edge(tb_clk); writeback("test 23 DEC", ALU_DEC, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 23 DEC");
+
+        --test24: unused opcode FF behaves as NOP (F D E, no enables)
+        tb_opcode <= x"FF"; tb_z_flag <= '1'; tb_c_flag <= '1';
+        wait until falling_edge(tb_clk); decode("test 24 unused", ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); execute("test 24 unused", '0', '0', '0', '0', ALU_ADD, WB_ALU);
+        wait until falling_edge(tb_clk); fetch("test 24 unused");
+        
+        --test25: reset during DECODE returns to FETCH, then resumes
+        tb_opcode <= OP_ADD; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); decode("test 25 ADD", ALU_ADD, WB_ALU);
+        tb_rst <= '1';
+        wait until falling_edge(tb_clk); fetch("test 25 reset");
+        tb_rst <= '0';
+        wait until falling_edge(tb_clk); decode("test 25 resume", ALU_ADD, WB_ALU);
+        
         report "all tests completed and passed" severity note;
         wait;
     end process stim_proc;

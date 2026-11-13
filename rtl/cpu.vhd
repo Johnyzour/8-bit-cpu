@@ -4,7 +4,9 @@
 --               and wires the PC, instruction ROM, instruction register,
 --               control FSM, register file, ALU, data RAM, flags register and
 --               writeback mux.
--- Notes       : Each instruction takes 3 or 4 clocks (FETCH, DECODE, EXECUTE,
+-- Notes       : Instruction format (24-bit): opcode(23:16) | rd(15:12) |
+--               rs(11:8) | imm(7:0); only bits 13:12 and 9:8 select R0-R3.
+--               Each instruction takes 3 or 4 clocks (FETCH, DECODE, EXECUTE,
 --               WRITEBACK). The IR holds the instruction for the whole
 --               sequence; the control FSM enables each write only in its state.
 --               The *_dbg ports expose internal state for the testbench.
@@ -19,7 +21,7 @@ entity cpu is
         clk       : in  std_logic;
         rst       : in  std_logic;
         pc_dbg    : out std_logic_vector (7 downto 0);
-        instr_dbg : out std_logic_vector (15 downto 0);
+        instr_dbg : out std_logic_vector (23 downto 0);
         reg_a_dbg : out std_logic_vector (7 downto 0);
         z_dbg     : out std_logic;
         c_dbg     : out std_logic;
@@ -29,7 +31,7 @@ end entity cpu;
 
 architecture structural of cpu is
     signal pc_val     : std_logic_vector (7 downto 0);
-    signal instr      : std_logic_vector (15 downto 0);
+    signal instr      : std_logic_vector (23 downto 0);
     signal reg_a      : std_logic_vector (7 downto 0);
     signal reg_b      : std_logic_vector (7 downto 0);
     signal alu_result : std_logic_vector (7 downto 0);
@@ -43,11 +45,11 @@ architecture structural of cpu is
     signal ram_wr_en  : std_logic;
     signal z_load     : std_logic;
     signal c_load     : std_logic;
-    signal pc_load    : std_logic;    
+    signal pc_load    : std_logic; 
     signal pc_inc     : std_logic;
     signal wb_sel     : std_logic_vector (1 downto 0);
-    signal alu_sel    : std_logic_vector (2 downto 0);
-    signal rom_out    : std_logic_vector (15 downto 0);
+    signal alu_sel    : std_logic_vector (3 downto 0);
+    signal rom_out    : std_logic_vector (23 downto 0);
     signal ir_load    : std_logic;
     signal state      : state_t;
 begin
@@ -58,7 +60,7 @@ begin
         pc_inc    => pc_inc,
         pc_load   => pc_load,
         jump_addr => instr(7 downto 0),
-        pc_out    => pc_val         
+        pc_out    => pc_val
     );
     
     u_instr_rom : entity work.instr_rom
@@ -80,7 +82,7 @@ begin
     port map (
         clk       => clk,
         rst       => rst,
-        opcode    => instr(15 downto 12),
+        opcode    => instr(23 downto 16),
         z_flag    => z_flag,
         c_flag    => c_flag,
         reg_wr_en => reg_wr_en,
@@ -100,9 +102,9 @@ begin
         clk       => clk,
         rst       => rst,
         wr_en     => reg_wr_en,
-        wr_sel    => instr(11 downto 10),
+        wr_sel    => instr(13 downto 12),
         wr_data   => wb_data,
-        rd_sel_a  => instr(11 downto 10),
+        rd_sel_a  => instr(13 downto 12),
         rd_sel_b  => instr(9 downto 8),
         rd_data_a => reg_a,
         rd_data_b => reg_b
@@ -149,11 +151,11 @@ begin
         wb_data    => wb_data
     );
     
-    pc_dbg    <= pc_val; 
-    instr_dbg <= instr; 
-    reg_a_dbg <= reg_a; 
-    z_dbg     <= z_flag; 
+    pc_dbg    <= pc_val;
+    instr_dbg <= instr;
+    reg_a_dbg <= reg_a;
+    z_dbg     <= z_flag;
     c_dbg     <= c_flag;
     state_dbg <= state;
-     
+
 end architecture structural;
