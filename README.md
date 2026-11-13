@@ -16,9 +16,9 @@ CPU state on every clock cycle.
 > | Branch | Version | Status |
 > |---|---|---|
 > | `main` | Single-cycle CPU (tag `v1.0-single-cycle`) | Complete and verified |
-> | `multicycle` | Multi-cycle CPU with an FSM control unit | **Under development, not finished.** Code on this branch may be incomplete or fail its testbenches |
+> | `multicycle` | Multi-cycle CPU with an FSM control unit | Complete and verified |
 >
-> This README describes the single-cycle version on `main`.
+> This README describes the single-cycle version on `main`. The `multicycle` branch has its own README covering the FSM, cycle counts and its testbenches.
 
 ---
 
@@ -539,5 +539,4 @@ constant rom_data : rom_type := (
 - **Shift and INC/DEC instructions**, using the spare ALU codes `110` and `111`.
 - **Register-indirect addressing** for LD/ST (address taken from a register).
 - **Stack pointer** with PUSH, POP, CALL and RET.
-- **Multi-cycle version** with a finite-state-machine control unit. *In progress on the `multicycle` branch.*
-
+- **Multi-cycle version** with a finite-state-machine control unit. *Done: see the `multicycle` branch.*
