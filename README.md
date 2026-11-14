@@ -15,9 +15,9 @@ CPU state on every clock cycle.
 >
 > | Branch | Version | Status |
 > |---|---|---|
-> | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete and verified (this branch) |
-> | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete and verified |
-> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch (tag `v1.2-multicycle-von-neumann`) | Complete and verified |
+> | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete, frozen (this branch) |
+> | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete, frozen |
+> | `von-neumann` | Multi-cycle von Neumann CPU with a shared memory (tag `v1.2-multicycle-von-neumann`) | Actively under development |
 >
 > This README describes the `single-cycle` branch. The `multicycle` and `von-neumann` branches each have their own README covering their design, cycle counts and testbenches.
 
@@ -536,9 +536,4 @@ constant rom_data : rom_type := (
 
 ## Future work
 
-- **Load the ROM from a text file** at simulation start, so programs can change without editing VHDL.
-- **Shift and INC/DEC instructions**, using the spare ALU codes `110` and `111`. *Done: see the `multicycle` branch.*
-- **Register-indirect addressing** for LD/ST (address taken from a register).
-- **Stack pointer** with PUSH, POP, CALL and RET.
-- **Multi-cycle version** with a finite-state-machine control unit. *Done: see the `multicycle` branch.*
-
+This branch is complete and frozen. Development continues on the `von-neumann` branch (v1.2); see its README for the current feature set and future plans.
