@@ -1,11 +1,15 @@
 --------------------------------------------------------------------------------
 -- File        : cpu.vhd
 -- Description : Top level of the 8-bit multi-cycle von Neumann CPU.
---               Instantiates and wires the PC, shared memory, memory address
---               mux, instruction register, control FSM, register file, ALU,
---               flags register and writeback mux.
--- Notes       : One 256 x 8 memory holds both the program and the data. The
---               address mux selects the PC during fetch and imm for LD/ST.
+--               Instantiates and wires the PC, stack pointer, shared memory,
+--               memory address and data muxes, PC source mux, instruction
+--               register, control FSM, register file, ALU, flags register and
+--               writeback mux.
+-- Notes       : One 256 x 8 memory holds the program, the data and the stack.
+--               The address comes from the PC (fetch), imm (LD/ST) or SP
+--               (PUSH/POP/CALL/RET), selected by two cascaded mux2. Memory
+--               write data is a register, or the PC for CALL; the PC jump
+--               address is imm, or the memory output for RET.
 --               Instruction format (24-bit): opcode(23:16) | rd(15:12) |
 --               rs(11:8) | imm(7:0), stored as three bytes and fetched one
 --               byte per clock in FETCH1-3; only bits 13:12 and 9:8 select
@@ -26,6 +30,7 @@ entity cpu is
         reg_a_dbg : out std_logic_vector (7 downto 0);
         z_dbg     : out std_logic;
         c_dbg     : out std_logic;
+        sp_dbg    : out std_logic_vector (7 downto 0);
         state_dbg : out state_t
     );
 end entity cpu;
@@ -48,11 +53,19 @@ architecture structural of cpu is
     signal c_load       : std_logic;
     signal pc_load      : std_logic; 
     signal pc_inc       : std_logic;
+    signal sp_inc       : std_logic;
+    signal sp_dec       : std_logic;
+    signal mem_data_sel : std_logic;
+    signal pc_src_sel   : std_logic;
     signal wb_sel       : std_logic_vector (1 downto 0);
     signal alu_sel      : std_logic_vector (3 downto 0);
     signal mem_addr     : std_logic_vector (7 downto 0);
-    signal mem_addr_sel : std_logic;
+    signal mem_addr_sel : std_logic_vector (1 downto 0);
     signal ir_load      : std_logic_vector (2 downto 0);
+    signal sp_val       : std_logic_vector (7 downto 0);
+    signal addr_a       : std_logic_vector (7 downto 0);
+    signal mem_data_in  : std_logic_vector (7 downto 0);
+    signal jump_addr    : std_logic_vector (7 downto 0);
     signal state        : state_t;
 begin
     u_pc : entity work.pc
@@ -61,7 +74,7 @@ begin
         rst       => rst,
         pc_inc    => pc_inc,
         pc_load   => pc_load,
-        jump_addr => instr(7 downto 0),
+        jump_addr => jump_addr,
         pc_out    => pc_val
     );
     
@@ -70,7 +83,7 @@ begin
         clk      => clk,
         wr_en    => mem_wr_en,
         addr     => mem_addr,
-        data_in  => reg_a,
+        data_in  => mem_data_in,
         data_out => mem_out
     );
     
@@ -100,6 +113,10 @@ begin
         pc_inc       => pc_inc,
         ir_load      => ir_load,
         mem_addr_sel => mem_addr_sel,
+        sp_inc       => sp_inc,
+        sp_dec       => sp_dec,
+        mem_data_sel => mem_data_sel,
+        pc_src_sel   => pc_src_sel,
         state_out    => state
     );
     
@@ -152,11 +169,45 @@ begin
     port map (
         in0 => pc_val,
         in1 => instr(7 downto 0),
-        sel => mem_addr_sel,
-        y   => mem_addr        
+        sel => mem_addr_sel(0),
+        y   => addr_a        
+    );
+    
+    u_addr_mux_sp : entity work.mux2
+    port map (
+        in0 => addr_a,
+        in1 => sp_val,
+        sel => mem_addr_sel(1),
+        y   => mem_addr  
+    );
+    
+    u_data_mux : entity work.mux2
+    port map (
+        in0 => reg_a,
+        in1 => pc_val,
+        sel => mem_data_sel,
+        y   => mem_data_in  
+    );
+    
+    u_pc_src_mux : entity work.mux2
+    port map (
+        in0 => instr(7 downto 0),
+        in1 => mem_out,
+        sel => pc_src_sel,
+        y   => jump_addr  
+    );
+    
+    u_sp : entity work.sp
+    port map (
+        clk    => clk,
+        rst    => rst,
+        sp_inc => sp_inc,
+        sp_dec => sp_dec,
+        sp_out => sp_val  
     );
     
     pc_dbg    <= pc_val;
+    sp_dbg    <= sp_val;
     instr_dbg <= instr;
     reg_a_dbg <= reg_a;
     z_dbg     <= z_flag;

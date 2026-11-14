@@ -5,19 +5,23 @@
 --               datapath control signals from the 8-bit opcode, the current
 --               state and the Z/C flags.
 -- Notes       : Three processes: state register, next-state logic, output
---               logic. Selects (alu_sel, wb_sel) depend on the opcode only;
---               enables depend on the state.
+--               logic. Selects (alu_sel, wb_sel, mem_data_sel, pc_src_sel)
+--               depend on the opcode only; enables depend on the state.
 --               The three FETCH states read one instruction byte each and
 --               increment the PC. The shared memory reads synchronously, so
 --               each byte is loaded into the IR one state later: opcode in
 --               FETCH2, rd/rs in FETCH3, imm in DECODE.
---               mem_addr_sel selects imm in EXECUTE for LD and ST, and the PC
---               otherwise.
---               LDI and MOV skip EXECUTE. NOP, ST, CMP and the jumps skip
---               WRITEBACK. ALU ops (ADD, SUB, AND, OR, XOR, NOT, SHL, SHR,
---               INC, DEC) and LD take all six states. ADD, SUB, CMP, SHL, SHR,
---               INC and DEC load Z and C; AND, OR, XOR and NOT load Z only.
---               Unused opcodes (14-FF) behave as NOP. Synchronous active-high
+--               mem_addr_sel selects imm in EXECUTE for LD and ST, SP in
+--               EXECUTE for PUSH, POP, CALL and RET, and the PC otherwise.
+--               PUSH and CALL decrement SP in DECODE and write in EXECUTE
+--               (CALL writes the return address and jumps on the same edge).
+--               POP and RET read in EXECUTE, increment SP, and use the byte in
+--               WRITEBACK (POP writes rd, RET loads the PC).
+--               LDI and MOV skip EXECUTE. NOP, ST, CMP, PUSH, CALL and the
+--               jumps skip WRITEBACK. ALU ops, LD, POP and RET take all six
+--               states. ADD, SUB, CMP, SHL, SHR, INC and DEC load Z and C;
+--               AND, OR, XOR and NOT load Z only.
+--               Unused opcodes (18-FF) behave as NOP. Synchronous active-high
 --               reset returns to FETCH1.
 --------------------------------------------------------------------------------
 
@@ -41,7 +45,11 @@ entity control_unit is
         pc_load      : out std_logic;
         pc_inc       : out std_logic;
         ir_load      : out std_logic_vector (2 downto 0);
-        mem_addr_sel : out std_logic;
+        mem_addr_sel : out std_logic_vector (1 downto 0);
+        sp_inc       : out std_logic;
+        sp_dec       : out std_logic;
+        mem_data_sel : out std_logic;
+        pc_src_sel   : out std_logic;
         state_out    : out state_t
     );
 end entity control_unit;
@@ -79,7 +87,7 @@ begin
                 end if;
             when S_EXECUTE =>
                 case opcode is
-                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
+                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC | OP_POP | OP_RET =>
                         next_state <= S_WRITEBACK;
                     when others =>
                         next_state <= S_FETCH1;
@@ -98,6 +106,10 @@ begin
         mem_wr_en    <= '0';
         z_load       <= '0';
         c_load       <= '0';
+        sp_inc       <= '0';
+        sp_dec       <= '0';
+        mem_data_sel <= MEMD_REG;
+        pc_src_sel   <= PCSRC_IMM;
         alu_sel      <= ALU_ADD;
         mem_addr_sel <= ADDR_PC;
         wb_sel       <= WB_ALU;
@@ -127,6 +139,12 @@ begin
                 alu_sel <= ALU_INC;
             when OP_DEC =>
                 alu_sel <= ALU_DEC;
+            when OP_POP =>
+                wb_sel <= WB_RAM;
+            when OP_CALL =>
+                mem_data_sel <= MEMD_PC;
+            when OP_RET =>
+                pc_src_sel <= PCSRC_MEM;  
             when others =>
                 null;
         end case;
@@ -142,6 +160,9 @@ begin
                 ir_load <= "010";
             when S_DECODE =>
                 ir_load <= "001";
+                if opcode = OP_PUSH or opcode = OP_CALL then
+                    sp_dec <= '1';
+                end if;   
             when S_EXECUTE =>
                 case opcode is
                     when OP_ADD | OP_SUB | OP_CMP | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
@@ -162,11 +183,29 @@ begin
                         pc_load <= not z_flag;
                     when OP_JC =>
                         pc_load <= c_flag;
+                    when OP_PUSH =>
+                        mem_addr_sel <= ADDR_SP;
+                        mem_wr_en <= '1';
+                    when OP_POP =>
+                        mem_addr_sel <= ADDR_SP;
+                        sp_inc <= '1';    
+                    when OP_CALL =>
+                        mem_addr_sel <= ADDR_SP;
+                        mem_wr_en <= '1';
+                        pc_load <= '1';
+                    when OP_RET =>
+                        mem_addr_sel <= ADDR_SP;
+                        sp_inc <= '1';
                     when others =>
                         null;
                 end case;
             when S_WRITEBACK =>
-                reg_wr_en <= '1';
+                case opcode is
+                    when OP_RET =>
+                        pc_load <='1';
+                    when others =>
+                        reg_wr_en <= '1';
+                end case;
         end case;             
     end process output_logic;
     
