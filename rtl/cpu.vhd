@@ -1,14 +1,15 @@
 --------------------------------------------------------------------------------
 -- File        : cpu.vhd
--- Description : Top level of the 8-bit multi-cycle Harvard CPU. Instantiates
---               and wires the PC, instruction ROM, instruction register,
---               control FSM, register file, ALU, data RAM, flags register and
---               writeback mux.
--- Notes       : Instruction format (24-bit): opcode(23:16) | rd(15:12) |
---               rs(11:8) | imm(7:0); only bits 13:12 and 9:8 select R0-R3.
---               Each instruction takes 3 or 4 clocks (FETCH, DECODE, EXECUTE,
---               WRITEBACK). The IR holds the instruction for the whole
---               sequence; the control FSM enables each write only in its state.
+-- Description : Top level of the 8-bit multi-cycle von Neumann CPU.
+--               Instantiates and wires the PC, shared memory, memory address
+--               mux, instruction register, control FSM, register file, ALU,
+--               flags register and writeback mux.
+-- Notes       : One 256 x 8 memory holds both the program and the data. The
+--               address mux selects the PC during fetch and imm for LD/ST.
+--               Instruction format (24-bit): opcode(23:16) | rd(15:12) |
+--               rs(11:8) | imm(7:0), stored as three bytes and fetched one
+--               byte per clock in FETCH1-3; only bits 13:12 and 9:8 select
+--               R0-R3. Each instruction takes 5 or 6 clocks.
 --               The *_dbg ports expose internal state for the testbench.
 --------------------------------------------------------------------------------
 
@@ -30,28 +31,29 @@ entity cpu is
 end entity cpu;
 
 architecture structural of cpu is
-    signal pc_val     : std_logic_vector (7 downto 0);
-    signal instr      : std_logic_vector (23 downto 0);
-    signal reg_a      : std_logic_vector (7 downto 0);
-    signal reg_b      : std_logic_vector (7 downto 0);
-    signal alu_result : std_logic_vector (7 downto 0);
-    signal alu_zero   : std_logic;
-    signal alu_carry  : std_logic;
-    signal z_flag     : std_logic;
-    signal c_flag     : std_logic;
-    signal ram_out    : std_logic_vector (7 downto 0);
-    signal wb_data    : std_logic_vector (7 downto 0);
-    signal reg_wr_en  : std_logic;
-    signal ram_wr_en  : std_logic;
-    signal z_load     : std_logic;
-    signal c_load     : std_logic;
-    signal pc_load    : std_logic; 
-    signal pc_inc     : std_logic;
-    signal wb_sel     : std_logic_vector (1 downto 0);
-    signal alu_sel    : std_logic_vector (3 downto 0);
-    signal rom_out    : std_logic_vector (23 downto 0);
-    signal ir_load    : std_logic;
-    signal state      : state_t;
+    signal pc_val       : std_logic_vector (7 downto 0);
+    signal instr        : std_logic_vector (23 downto 0);
+    signal reg_a        : std_logic_vector (7 downto 0);
+    signal reg_b        : std_logic_vector (7 downto 0);
+    signal alu_result   : std_logic_vector (7 downto 0);
+    signal alu_zero     : std_logic;
+    signal alu_carry    : std_logic;
+    signal z_flag       : std_logic;
+    signal c_flag       : std_logic;
+    signal mem_out      : std_logic_vector (7 downto 0);
+    signal wb_data      : std_logic_vector (7 downto 0);
+    signal reg_wr_en    : std_logic;
+    signal mem_wr_en    : std_logic;
+    signal z_load       : std_logic;
+    signal c_load       : std_logic;
+    signal pc_load      : std_logic; 
+    signal pc_inc       : std_logic;
+    signal wb_sel       : std_logic_vector (1 downto 0);
+    signal alu_sel      : std_logic_vector (3 downto 0);
+    signal mem_addr     : std_logic_vector (7 downto 0);
+    signal mem_addr_sel : std_logic;
+    signal ir_load      : std_logic_vector (2 downto 0);
+    signal state        : state_t;
 begin
     u_pc : entity work.pc
     port map (
@@ -63,10 +65,13 @@ begin
         pc_out    => pc_val
     );
     
-    u_instr_rom : entity work.instr_rom
+    u_memory : entity work.memory
     port map (
-        addr  => pc_val,
-        instr => rom_out
+        clk      => clk,
+        wr_en    => mem_wr_en,
+        addr     => mem_addr,
+        data_in  => reg_a,
+        data_out => mem_out
     );
     
     u_ir : entity work.ir
@@ -74,27 +79,28 @@ begin
         clk      => clk,
         rst      => rst,
         ir_load  => ir_load,
-        data_in  => rom_out,
+        data_in  => mem_out,
         data_out => instr
     );
     
     u_control_unit : entity work.control_unit
     port map (
-        clk       => clk,
-        rst       => rst,
-        opcode    => instr(23 downto 16),
-        z_flag    => z_flag,
-        c_flag    => c_flag,
-        reg_wr_en => reg_wr_en,
-        wb_sel    => wb_sel,
-        alu_sel   => alu_sel,
-        ram_wr_en => ram_wr_en,
-        z_load    => z_load,
-        c_load    => c_load,
-        pc_load   => pc_load,
-        pc_inc    => pc_inc,
-        ir_load   => ir_load,
-        state_out => state
+        clk          => clk,
+        rst          => rst,
+        opcode       => instr(23 downto 16),
+        z_flag       => z_flag,
+        c_flag       => c_flag,
+        reg_wr_en    => reg_wr_en,
+        wb_sel       => wb_sel,
+        alu_sel      => alu_sel,
+        mem_wr_en    => mem_wr_en,
+        z_load       => z_load,
+        c_load       => c_load,
+        pc_load      => pc_load,
+        pc_inc       => pc_inc,
+        ir_load      => ir_load,
+        mem_addr_sel => mem_addr_sel,
+        state_out    => state
     );
     
     u_reg_file : entity work.reg_file
@@ -120,15 +126,6 @@ begin
         carry   => alu_carry
     );
     
-    u_data_ram : entity work.data_ram
-    port map (
-        clk      => clk,
-        wr_en    => ram_wr_en,
-        addr     => instr(7 downto 0),
-        data_in  => reg_a,
-        data_out => ram_out
-    );
-    
     u_flags_reg : entity work.flags_reg
     port map (
         clk    => clk,
@@ -144,11 +141,19 @@ begin
     u_wb_mux : entity work.wb_mux
     port map (
         alu_result => alu_result,
-        ram_data   => ram_out,
+        ram_data   => mem_out,
         imm        => instr(7 downto 0),
         reg_b      => reg_b,
         sel        => wb_sel,
         wb_data    => wb_data
+    );
+    
+    u_addr_mux : entity work.mux2
+    port map (
+        in0 => pc_val,
+        in1 => instr(7 downto 0),
+        sel => mem_addr_sel,
+        y   => mem_addr        
     );
     
     pc_dbg    <= pc_val;

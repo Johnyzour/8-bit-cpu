@@ -1,8 +1,9 @@
 --------------------------------------------------------------------------------
 -- File        : tb_ir.vhd
--- Description : Self-checking testbench for ir. Tests reset, load, hold, full
---               24-bit width, reset priority and load timing.
--- Notes       : Prints "all tests completed and passed" at 80 ns.
+-- Description : Self-checking testbench for ir. Checks reset, each byte load
+--               on its own, assembly of a full instruction, hold, independent
+--               multi-byte loads, reset priority and load timing.
+-- Notes       : Prints "all tests completed and passed" at 110 ns.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -14,8 +15,8 @@ end entity tb_ir;
 architecture sim of tb_ir is
     signal tb_clk      : std_logic := '0';
     signal tb_rst      : std_logic := '0';
-    signal tb_ir_load  : std_logic := '0';
-    signal tb_data_in  : std_logic_vector (23 downto 0) := (others => '0');
+    signal tb_ir_load  : std_logic_vector (2 downto 0) := (others => '0');
+    signal tb_data_in  : std_logic_vector (7 downto 0) := (others => '0');
     signal tb_data_out : std_logic_vector (23 downto 0);
 begin
     uut : entity work.ir
@@ -38,59 +39,80 @@ begin
     stim_proc : process
     begin
         wait until falling_edge(tb_clk);
-        
-        --test1: reset clears from U
+
+        --test1: reset clears the IR
         tb_rst     <= '1';
-        tb_ir_load <= '0';
-        tb_data_in <= x"000000";
+        tb_ir_load <= "000";
+        tb_data_in <= x"00";
         wait until falling_edge(tb_clk);
         assert(tb_data_out = x"000000") report "test 1 failed" severity failure;
-    
-        --test2: load
-        tb_rst     <= '0';
-        tb_ir_load <= '1';
-        tb_data_in <= x"01000F";
-        wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"01000F") report "test 2 failed" severity failure;
 
-        --test3: holds when ir_load = 0
+        --test2: byte 2 (opcode) loads alone
         tb_rst     <= '0';
-        tb_ir_load <= '0';
-        tb_data_in <= x"022100";
+        tb_ir_load <= "100";
+        tb_data_in <= x"01";
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"01000F") report "test 3 failed" severity failure;
+        assert(tb_data_out = x"010000") report "test 2 failed" severity failure;
 
-        --test4: loads a new value
+        --test3: byte 1 (rd/rs) loads alone, byte 2 kept
         tb_rst     <= '0';
-        tb_ir_load <= '1';
-        tb_data_in <= x"0C0012";
+        tb_ir_load <= "010";
+        tb_data_in <= x"23";
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"0C0012") report "test 4 failed" severity failure;
+        assert(tb_data_out = x"012300") report "test 3 failed" severity failure;
 
-        --test5: all bits set
+        --test4: byte 0 (imm) loads alone, full instruction assembled
         tb_rst     <= '0';
-        tb_ir_load <= '1';
-        tb_data_in <= x"FFFFFF";
+        tb_ir_load <= "001";
+        tb_data_in <= x"0F";
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"FFFFFF") report "test 5 failed" severity failure;
+        assert(tb_data_out = x"01230F") report "test 4 failed" severity failure;
 
-        --test6: reset beats load
+        --test5: hold when no byte is enabled
+        tb_rst     <= '0';
+        tb_ir_load <= "000";
+        tb_data_in <= x"FF";
+        wait until falling_edge(tb_clk);
+        assert(tb_data_out = x"01230F") report "test 5 failed" severity failure;
+
+        --test6: only the middle byte changes
+        tb_rst     <= '0';
+        tb_ir_load <= "010";
+        tb_data_in <= x"45";
+        wait until falling_edge(tb_clk);
+        assert(tb_data_out = x"01450F") report "test 6 failed" severity failure;
+
+        --test7: all three bytes load together (independent enables)
+        tb_rst     <= '0';
+        tb_ir_load <= "111";
+        tb_data_in <= x"AA";
+        wait until falling_edge(tb_clk);
+        assert(tb_data_out = x"AAAAAA") report "test 7 failed" severity failure;
+
+        --test8: non-adjacent bytes load, middle byte kept
+        tb_rst     <= '0';
+        tb_ir_load <= "101";
+        tb_data_in <= x"5C";
+        wait until falling_edge(tb_clk);
+        assert(tb_data_out = x"5CAA5C") report "test 8 failed" severity failure;
+
+        --test9: reset beats every load
         tb_rst     <= '1';
-        tb_ir_load <= '1';
-        tb_data_in <= x"052000";
+        tb_ir_load <= "111";
+        tb_data_in <= x"FF";
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"000000") report "test 6 failed" severity failure;
+        assert(tb_data_out = x"000000") report "test 9 failed" severity failure;
 
-        --test7a: load, not visible before the rising edge
+        --test10a: load opcode C3, not visible before the rising edge
         tb_rst     <= '0';
-        tb_ir_load <= '1';
-        tb_data_in <= x"0B3200";
+        tb_ir_load <= "100";
+        tb_data_in <= x"C3";
         wait for 4 ns;
-        assert(tb_data_out = x"000000") report "test 7a failed" severity failure;
+        assert(tb_data_out = x"000000") report "test 10a failed" severity failure;
 
-        --test7b: same inputs, visible after the rising edge
+        --test10b: same inputs, visible after the rising edge
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"0B3200") report "test 7b failed" severity failure;
+        assert(tb_data_out = x"C30000") report "test 10b failed" severity failure;
 
         report "all tests completed and passed" severity note;
         wait;

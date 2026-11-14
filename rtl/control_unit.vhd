@@ -1,19 +1,24 @@
 --------------------------------------------------------------------------------
 -- File        : control_unit.vhd
--- Description : Multicycle control unit. Moore FSM with four states
---               (FETCH, DECODE, EXECUTE, WRITEBACK) that drives the datapath
---               control signals from the 8-bit opcode, the current state and
---               the Z/C flags.
+-- Description : Multicycle control unit. Moore FSM with six states (FETCH1,
+--               FETCH2, FETCH3, DECODE, EXECUTE, WRITEBACK) that drives the
+--               datapath control signals from the 8-bit opcode, the current
+--               state and the Z/C flags.
 -- Notes       : Three processes: state register, next-state logic, output
 --               logic. Selects (alu_sel, wb_sel) depend on the opcode only;
 --               enables depend on the state.
---               FETCH loads the IR and increments the PC. LDI and MOV skip
---               EXECUTE. NOP, ST, CMP and the jumps skip WRITEBACK.
---               ALU ops (ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC) and
---               LD take all four states. ADD, SUB, CMP, SHL, SHR, INC and DEC
---               load Z and C; AND, OR, XOR and NOT load Z only.
+--               The three FETCH states read one instruction byte each and
+--               increment the PC. The shared memory reads synchronously, so
+--               each byte is loaded into the IR one state later: opcode in
+--               FETCH2, rd/rs in FETCH3, imm in DECODE.
+--               mem_addr_sel selects imm in EXECUTE for LD and ST, and the PC
+--               otherwise.
+--               LDI and MOV skip EXECUTE. NOP, ST, CMP and the jumps skip
+--               WRITEBACK. ALU ops (ADD, SUB, AND, OR, XOR, NOT, SHL, SHR,
+--               INC, DEC) and LD take all six states. ADD, SUB, CMP, SHL, SHR,
+--               INC and DEC load Z and C; AND, OR, XOR and NOT load Z only.
 --               Unused opcodes (14-FF) behave as NOP. Synchronous active-high
---               reset returns to FETCH.
+--               reset returns to FETCH1.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -22,21 +27,22 @@ use work.cpu_pkg.all;
 
 entity control_unit is
     port (
-        clk       : in  std_logic;
-        rst       : in  std_logic;    
-        opcode    : in  std_logic_vector (7 downto 0);
-        z_flag    : in  std_logic;
-        c_flag    : in  std_logic;
-        reg_wr_en : out std_logic;
-        wb_sel    : out std_logic_vector (1 downto 0);
-        alu_sel   : out std_logic_vector (3 downto 0);
-        ram_wr_en : out std_logic;
-        z_load    : out std_logic;
-        c_load    : out std_logic;
-        pc_load   : out std_logic;
-        pc_inc    : out std_logic;
-        ir_load   : out std_logic;
-        state_out : out state_t
+        clk          : in  std_logic;
+        rst          : in  std_logic;    
+        opcode       : in  std_logic_vector (7 downto 0);
+        z_flag       : in  std_logic;
+        c_flag       : in  std_logic;
+        reg_wr_en    : out std_logic;
+        wb_sel       : out std_logic_vector (1 downto 0);
+        alu_sel      : out std_logic_vector (3 downto 0);
+        mem_wr_en    : out std_logic;
+        z_load       : out std_logic;
+        c_load       : out std_logic;
+        pc_load      : out std_logic;
+        pc_inc       : out std_logic;
+        ir_load      : out std_logic_vector (2 downto 0);
+        mem_addr_sel : out std_logic;
+        state_out    : out state_t
     );
 end entity control_unit;
 
@@ -48,7 +54,7 @@ begin
     begin
         if rising_edge(clk) then
             if rst = '1' then
-                state <= S_FETCH;
+                state <= S_FETCH1;
             else
                 state <= next_state;
             end if;
@@ -57,10 +63,14 @@ begin
     
     next_state_logic : process (state, opcode)
     begin
-        next_state <= S_FETCH;
+        next_state <= S_FETCH1;
         case state is
-            when S_FETCH =>
-                next_state <= S_DECODE;
+            when S_FETCH1 =>
+                next_state <= S_FETCH2;
+            when S_FETCH2 =>
+                next_state <= S_FETCH3;
+            when S_FETCH3 =>
+                next_state <= S_DECODE;    
             when S_DECODE =>
                 if opcode = OP_LDI or opcode = OP_MOV then
                     next_state <= S_WRITEBACK;
@@ -72,24 +82,25 @@ begin
                     when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
                         next_state <= S_WRITEBACK;
                     when others =>
-                        next_state <= S_FETCH;
+                        next_state <= S_FETCH1;
                 end case;
             when S_WRITEBACK =>
-                next_state <= S_FETCH;
+                next_state <= S_FETCH1;
         end case;
     end process next_state_logic;
     
     output_logic : process (state, opcode, z_flag, c_flag)
     begin
-        ir_load   <= '0';
-        pc_inc    <= '0';
-        pc_load   <= '0';
-        reg_wr_en <= '0';
-        ram_wr_en <= '0';
-        z_load    <= '0';
-        c_load    <= '0';
-        alu_sel   <= ALU_ADD;
-        wb_sel    <= WB_ALU;
+        ir_load      <= "000";
+        pc_inc       <= '0';
+        pc_load      <= '0';
+        reg_wr_en    <= '0';
+        mem_wr_en    <= '0';
+        z_load       <= '0';
+        c_load       <= '0';
+        alu_sel      <= ALU_ADD;
+        mem_addr_sel <= ADDR_PC;
+        wb_sel       <= WB_ALU;
         
         case opcode is
             when OP_SUB | OP_CMP =>
@@ -121,11 +132,16 @@ begin
         end case;
         
         case state is
-            when S_FETCH =>
-                ir_load <= '1';
+            when S_FETCH1 =>
+                pc_inc <= '1';
+            when S_FETCH2 =>
                 pc_inc  <= '1';
+                ir_load <= "100";
+            when S_FETCH3 =>        
+                pc_inc  <= '1';
+                ir_load <= "010";
             when S_DECODE =>
-                null;
+                ir_load <= "001";
             when S_EXECUTE =>
                 case opcode is
                     when OP_ADD | OP_SUB | OP_CMP | OP_SHL | OP_SHR | OP_INC | OP_DEC =>
@@ -133,8 +149,11 @@ begin
                         c_load <= '1';
                     when OP_AND | OP_OR | OP_XOR | OP_NOT =>
                         z_load <= '1';
+                    when OP_LD =>
+                        mem_addr_sel <= ADDR_IMM;
                     when OP_ST =>
-                        ram_wr_en <= '1';
+                        mem_wr_en    <= '1';
+                        mem_addr_sel <= ADDR_IMM;
                     when OP_JMP =>
                         pc_load <= '1';
                     when OP_JZ =>

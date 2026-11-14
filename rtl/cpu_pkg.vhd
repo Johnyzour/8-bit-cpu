@@ -1,14 +1,24 @@
 --------------------------------------------------------------------------------
--- File        : cpu_pkg.vhd
--- Description : Shared constants and types for the CPU: 8-bit opcodes (OP_*),
---               4-bit ALU operation codes (ALU_*), 4-bit register numbers
---               (REG0-REG3), 2-bit writeback-mux selects (WB_*) and the
---               control FSM state type (state_t).
--- Notes       : Instruction format (24-bit, byte-aligned):
---               opcode(23:16) | rd(15:12) | rs(11:8) | imm(7:0).
---               20 opcodes used (00-13); the rest decode as NOP.
---               Only R0-R3 exist; the upper bits of rd/rs are reserved (0).
---               WB_* values must match the input order of wb_mux.
+-- File        : control_unit.vhd
+-- Description : Multicycle control unit. Moore FSM with six states (FETCH1,
+--               FETCH2, FETCH3, DECODE, EXECUTE, WRITEBACK) that drives the
+--               datapath control signals from the 8-bit opcode, the current
+--               state and the Z/C flags.
+-- Notes       : Three processes: state register, next-state logic, output
+--               logic. Selects (alu_sel, wb_sel) depend on the opcode only;
+--               enables depend on the state.
+--               The three FETCH states read one instruction byte each and
+--               increment the PC. The shared memory reads synchronously, so
+--               each byte is loaded into the IR one state later: opcode in
+--               FETCH2, rd/rs in FETCH3, imm in DECODE.
+--               mem_addr_sel selects imm in EXECUTE for LD and ST, and the PC
+--               otherwise.
+--               LDI and MOV skip EXECUTE. NOP, ST, CMP and the jumps skip
+--               WRITEBACK. ALU ops (ADD, SUB, AND, OR, XOR, NOT, SHL, SHR,
+--               INC, DEC) and LD take all six states. ADD, SUB, CMP, SHL, SHR,
+--               INC and DEC load Z and C; AND, OR, XOR and NOT load Z only.
+--               Unused opcodes (14-FF) behave as NOP. Synchronous active-high
+--               reset returns to FETCH1.
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -57,5 +67,8 @@ package cpu_pkg is
     constant WB_IMM : std_logic_vector (1 downto 0) := "10";
     constant WB_REG : std_logic_vector (1 downto 0) := "11";
     
-    type state_t is (S_FETCH, S_DECODE, S_EXECUTE, S_WRITEBACK);
+    constant ADDR_PC  : std_logic := '0';
+    constant ADDR_IMM : std_logic := '1';
+    
+    type state_t is (S_FETCH1, S_FETCH2, S_FETCH3, S_DECODE, S_EXECUTE, S_WRITEBACK);
 end package cpu_pkg;
