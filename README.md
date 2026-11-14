@@ -19,9 +19,9 @@ with byte-aligned fields, the opcode from 4 to 8 bits and the ALU select from
 >
 > | Branch | Version | Status |
 > |---|---|---|
-> | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete and verified |
-> | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete and verified (this branch) |
-> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch (tag `v1.2-multicycle-von-neumann`) | Complete and verified |
+> | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete, frozen |
+> | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete, frozen (this branch) |
+> | `von-neumann` | Multi-cycle von Neumann CPU with a shared memory (tag `v1.2-multicycle-von-neumann`) | Actively under development |
 >
 > The earlier multi-cycle version with 16-bit instructions and 16 opcodes is in this branch's commit history.
 
@@ -694,7 +694,4 @@ constant rom_data : rom_type := (
 
 ## Future work
 
-- **Synchronous memories** (block-RAM style), with A/B/ALUOut holding registers.
-- **Shared instruction/data memory** (von Neumann), which the multi-cycle structure makes possible. *Done: see the `von-neumann` branch.*
-- **Load the ROM from a text file** at simulation start.
-- **Stack pointer** with PUSH, POP, CALL and RET.
+This branch is complete and frozen. Development continues on the `von-neumann` branch (v1.2); see its README for the current feature set and future plans.
