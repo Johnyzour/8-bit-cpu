@@ -3,7 +3,7 @@
 A simple 8-bit, **multi-cycle**, Harvard-architecture CPU written in VHDL and
 verified with self-checking testbenches in the Vivado behavioral simulator (XSIM).
 
-This branch converts the single-cycle CPU on `main` into a multi-cycle design.
+This branch converts the single-cycle CPU on the `single-cycle` branch into a multi-cycle design.
 An instruction register holds each instruction while a finite-state-machine
 (FSM) control unit steps it through FETCH, DECODE, EXECUTE and WRITEBACK, taking
 3 or 4 clocks per instruction.
@@ -19,8 +19,9 @@ with byte-aligned fields, the opcode from 4 to 8 bits and the ALU select from
 >
 > | Branch | Version | Status |
 > |---|---|---|
-> | `main` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete and verified |
-> | `multicycle` | Multi-cycle CPU with an FSM control unit, 24-bit instructions, 20 instructions | Complete and verified (this branch) |
+> | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete and verified |
+> | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete and verified (this branch) |
+> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch (tag `v1.2-multicycle-von-neumann`) | Complete and verified |
 >
 > The earlier multi-cycle version with 16-bit instructions and 16 opcodes is in this branch's commit history.
 
@@ -69,7 +70,7 @@ with byte-aligned fields, the opcode from 4 to 8 bits and the ALU select from
 
 ## Single-cycle vs multi-cycle
 
-| | Single-cycle (`main`) | Multi-cycle (this branch) |
+| | Single-cycle (`single-cycle` branch) | Multi-cycle (this branch) |
 |---|---|---|
 | Clocks per instruction | 1 | 3 or 4 |
 | Control unit | Combinational `case` on the opcode | FSM: state register + next-state logic + output logic |
@@ -183,7 +184,7 @@ flowchart LR
 
 Solid arrows are data; dotted arrows are control signals from the FSM.
 
-The only datapath change from `main` is the IR between the ROM and the
+The only datapath change from the `single-cycle` branch is the IR between the ROM and the
 instruction fields. Every `instr(...)` slice comes from the IR, so the
 instruction stays stable while the FSM steps through its states, even though
 the PC has already moved on to the next address. Bits 15:14 and 11:10 (the
@@ -694,8 +695,6 @@ constant rom_data : rom_type := (
 ## Future work
 
 - **Synchronous memories** (block-RAM style), with A/B/ALUOut holding registers.
-- **Shared instruction/data memory** (von Neumann), which the multi-cycle structure makes possible.
+- **Shared instruction/data memory** (von Neumann), which the multi-cycle structure makes possible. *Done: see the `von-neumann` branch.*
 - **Load the ROM from a text file** at simulation start.
-- **Rotate instructions** (ROL/ROR through carry), using spare ALU codes `1010`-`1111`.
-- **More registers**, using the reserved upper bits of the rd and rs fields.
 - **Stack pointer** with PUSH, POP, CALL and RET.
