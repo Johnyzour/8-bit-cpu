@@ -18,7 +18,8 @@ growing down from `EF`.
 LD and ST can also take their address from a register (**register-indirect
 addressing**, LDR and STR), so a program can walk through memory with a pointer.
 
-**Status:** RTL complete. All 11 testbenches pass.
+**Status:** RTL complete. All 11 testbenches pass. Synthesizes in Vivado with
+0 warnings, and the shared memory is inferred as one block RAM (RAMB18).
 
 > **Branches**
 >
@@ -41,6 +42,7 @@ addressing**, LDR and STR), so a program can walk through memory with a pointer.
   - [Instruction layout in memory](#instruction-layout-in-memory)
   - [Synchronous read](#synchronous-read)
 - [Stack](#stack)
+- [Register-indirect addressing](#register-indirect-addressing)
 - [Architecture](#architecture)
   - [Design decisions](#design-decisions)
   - [Datapath](#datapath)
@@ -54,6 +56,7 @@ addressing**, LDR and STR), so a program can walk through memory with a pointer.
 - [Components](#components)
 - [Project structure](#project-structure)
 - [Running the simulation](#running-the-simulation)
+- [Synthesis](#synthesis)
 - [Verification](#verification)
 - [Writing your own program](#writing-your-own-program)
 - [Limitations](#limitations)
@@ -65,7 +68,7 @@ addressing**, LDR and STR), so a program can walk through memory with a pointer.
 
 - 8-bit data path, 8-bit program counter (256 byte addresses)
 - **Von Neumann architecture:** one 256 x 8 memory for code, data and the stack
-- Synchronous-read memory (block-RAM style), read-first on writes (simulation only; not yet synthesized)
+- Synchronous-read memory, read-first on writes, inferred as one block RAM (RAMB18) in synthesis
 - 24-bit byte-aligned instruction word, 26 instructions (8-bit opcode, room for 256)
 - Instructions fetched one byte per clock (FETCH1, FETCH2, FETCH3)
 - Four 8-bit general-purpose registers (R0-R3)
@@ -143,7 +146,7 @@ and returns the initial 256-byte image, which initialises the `mem` signal.
 ### Synchronous read
 
 `data_out` shows the byte at `addr` **one clock after** the address is
-applied, like FPGA block RAM. On a write edge the read returns the old byte
+applied, like FPGA block RAM, and synthesis maps it to one (see [Synthesis](#synthesis)). On a write edge the read returns the old byte
 (read-first). The FSM is built around that one-clock latency:
 
 - Each instruction byte is requested in one state and loaded into the IR in the next.
@@ -232,7 +235,7 @@ The address mux became a 4-to-1, built from three `mux2` in the same shape as
 |---|---|---|
 | Memory model | Von Neumann: one memory for code and data | The point of this branch. Fetch and data access are in different FSM states, so one port is enough |
 | Memory width | 8 bits | Matches the data width; a 24-bit instruction is three bytes with no wasted bits |
-| Memory read | Synchronous, read-first | Matches FPGA block RAM; the FSM absorbs the one-clock latency |
+| Memory read | Synchronous, read-first | Matches FPGA block RAM (synthesis infers one RAMB18); the FSM absorbs the one-clock latency |
 | Address source | Three `mux2` as a 4-to-1 selecting PC, imm, SP or a register (`mem_addr_sel`, 2 bits) | PC for every fetch; imm in EXECUTE for LD and ST; SP for the stack instructions; rs for LDR and STR |
 | Stack | SP points to the last pushed byte, grows down from `F0`; reset to `F0` | Standard convention; keeps the stack out of the data area `F0`-`FF` |
 | Stack in the FSM | Decrement in DECODE, access in EXECUTE, use popped byte in WRITEBACK | Fits PUSH/POP/CALL/RET into the existing six states |
@@ -649,6 +652,8 @@ flowchart TD
 │   ├── tb_flags_reg.vhd
 │   ├── tb_wb_mux.vhd
 │   └── tb_mux2.vhd
+├── synthesis/
+│   └── cpu_utilization_synth.rpt
 └── README.md
 ```
 
@@ -678,13 +683,41 @@ flowchart TD
 
 If XSIM reports that a unit "needs to be re-saved since 'xil_defaultlib.cpu_pkg' changed", use **Simulation → Reset Behavioral Simulation** and run again.
 
-A failing run stops at the first failed check, naming the test and signal, for example:
+A failing run stops at the first failed check and prints the testbench's message, for example:
 
-```
-Failure: cycle 131 failed: sp_dbg
-Failure: test 28 RET writeback failed: pc_load
-Failure: test 5 ST fetch2 failed: state is S_FETCH1
-```
+| Testbench | Example message | Meaning |
+|---|---|---|
+| `tb_cpu` | `cycle 131 failed: sp_dbg` | SP was wrong at cycle 131 |
+| `tb_control_unit` | `test 28 RET writeback failed: pc_load` | `pc_load` was wrong in RET's WRITEBACK state |
+| `tb_control_unit` | `test 5 ST fetch2 failed: state is S_FETCH1` | The FSM was in FETCH1 instead of FETCH2 during ST |
+
+---
+
+## Synthesis
+
+The design has been synthesized in Vivado 2026.1 to check that it maps to FPGA
+resources, in particular that the shared memory becomes block RAM. This is
+synthesis only: no constraints, implementation, timing or board.
+
+1. Right-click `cpu` in **Design Sources** → **Set as Top**.
+2. **Run Synthesis** (default settings). Any 7-series part works; the results below are for `xc7vx485tffg1157-1`.
+3. **Open Synthesized Design** → **Report Utilization**.
+
+The full report is in [`synthesis/cpu_utilization_synth.rpt`](synthesis/cpu_utilization_synth.rpt).
+
+| Resource | Used | Notes |
+|---|---|---|
+| Slice LUTs | 155 | ALU, muxes, control logic and the register-file read ports |
+| Slice registers | 80 | PC 8, SP 8, IR 24, register file 32, flags 2, FSM 6 |
+| F7 muxes | 8 | Register-file read multiplexers |
+| Block RAM tile | 0.5 | One RAMB18E1: the 256 x 8 shared memory |
+| Bonded IOB | 55 | `clk`, `rst` and the 53 debug output bits |
+| BUFGCTRL | 1 | Clock buffer |
+
+- **Block RAM:** the synthesis log's *Block RAM: Final Mapping Report* lists `u_memory/mem_reg` as 256 x 8, READ_FIRST, on one RAMB18. No attribute was needed: the synchronous, read-first, single-address `memory.vhd` is inferred as block RAM as written. The program image from `init_mem` becomes the RAM's initial contents.
+- **FSM:** Vivado recognises the control unit as a state machine and re-encodes the six states one-hot (hence 6 state registers instead of 3).
+- **Registers that reset to 1:** five of the registers are `FDSE` (set on reset): the four set bits of SP's reset value `F0` and the FETCH1 bit of the one-hot state.
+- **Messages:** 0 errors, 0 critical warnings, 0 warnings. One info message (`Synth 8-7052`) notes that timing could improve with an extra output register merged into the block RAM; that would make every read take two clocks, so it is not used.
 
 ---
 
@@ -1238,11 +1271,11 @@ constant prog_data : prog_type := (
 - No stack overflow or underflow detection: SP wraps.
 - Every instruction fetches all three bytes, even when it does not use rd/rs or imm.
 - The program is fixed in `memory.vhd`, and memory is not reloaded by a CPU reset.
+- Synthesis only: not implemented, timed or run on a board.
 
 ---
 
 ## Future work
 
-- **Block RAM**: the shared memory already has a synchronous read-first read, as block RAM does, without needing extra holding registers. Not yet synthesized: run Vivado synthesis (no board needed) and confirm in the utilization report that it is inferred as block RAM.
 - **Load the memory from a text file** at simulation start, so programs can change without editing VHDL.
 - **Simple assembler**: a script that turns assembly text into `prog_data`, so programs no longer have to be encoded by hand.
