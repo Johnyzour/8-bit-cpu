@@ -40,6 +40,7 @@ addressing**, LDR and STR), so a program can walk through memory with a pointer.
 - [Memory](#memory)
   - [Memory map](#memory-map)
   - [Instruction layout in memory](#instruction-layout-in-memory)
+  - [Program file](#program-file)
   - [Synchronous read](#synchronous-read)
 - [Stack](#stack)
 - [Register-indirect addressing](#register-indirect-addressing)
@@ -69,6 +70,7 @@ addressing**, LDR and STR), so a program can walk through memory with a pointer.
 - 8-bit data path, 8-bit program counter (256 byte addresses)
 - **Von Neumann architecture:** one 256 x 8 memory for code, data and the stack
 - Synchronous-read memory, read-first on writes, inferred as one block RAM (RAMB18) in synthesis
+- Program loaded from a text file (`program.mem`) at simulation start, so programs change without editing VHDL
 - 24-bit byte-aligned instruction word, 26 instructions (8-bit opcode, room for 256)
 - Instructions fetched one byte per clock (FETCH1, FETCH2, FETCH3)
 - Four 8-bit general-purpose registers (R0-R3)
@@ -139,9 +141,33 @@ Address   Byte   Part of instruction
   05       3C    imm      ─┘
 ```
 
-The program is written as a `prog_data` constant of 24-bit words in
-`memory.vhd`. The function `init_mem` splits each word into its three bytes
-and returns the initial 256-byte image, which initialises the `mem` signal.
+### Program file
+
+The program lives in `rtl/program.mem`, a text file with one 24-bit
+instruction per line as 6 hex digits:
+
+```
+-- comment lines start with two dashes (no leading spaces)
+01000F   -- 00: LDI R0, 0F
+01103C   -- 03: LDI R1, 3C
+```
+
+| Line | Handling |
+|---|---|
+| Empty | Skipped |
+| Starts with a dash, i.e. a `--` comment | Skipped |
+| 6 hex digits at the start of the line (no leading spaces), optionally followed by text | Instruction *n* (counting only instruction lines) goes to `3n`, `3n+1`, `3n+2`; the text after the digits is ignored, so it can hold a comment |
+| Not valid hex | Elaboration stops: `program.mem line N: bad hex` |
+| An 86th instruction | Elaboration stops: `program.mem line N: program too long (max 85 instructions)` (85 x 3 = 255 bytes) |
+
+The impure function `load_mem` in `memory.vhd` reads each line with `std.textio`
+only: `read` for the first character and `hread` for the other five digits.
+It never indexes the line string, because Vivado synthesis does not support
+that, so the same code loads the program in both simulation and synthesis. It
+returns the initial 256-byte image that initialises the `mem` signal.
+Addresses the program does not fill hold `00` (NOP). The file name is the
+generic `init_file` (default `"program.mem"`). The file is loaded once, when
+the simulation starts; a CPU reset does not reload it.
 
 ### Synchronous read
 
@@ -570,7 +596,7 @@ The state type `state_t`, the select constants `ADDR_*`, `MEMD_*` and `PCSRC_*`,
 | `cpu` | `cpu.vhd` | Structural | Top level; instantiates and wires every component. Exposes debug outputs |
 | `pc` | `pc.vhd` | Sequential | 8-bit program counter. Priority: reset > load > increment > hold |
 | `sp` | `sp.vhd` | Sequential | **New.** 8-bit stack pointer, resets to `F0`. Priority: reset > decrement > increment > hold |
-| `memory` | `memory.vhd` | Sequential | **New.** 256 x 8 shared memory, synchronous read-first, initialised with the program, no reset |
+| `memory` | `memory.vhd` | Sequential | **New.** 256 x 8 shared memory, synchronous read-first, loads the program from `program.mem`, no reset |
 | `ir` | `ir.vhd` | Sequential | **Changed.** 24-bit instruction register loaded one byte at a time |
 | `control_unit` | `control_unit.vhd` | Sequential (FSM) | **Changed.** 6-state control FSM, including the stack and register-indirect instructions |
 | `reg_file` | `reg_file.vhd` | Sequential | 4 x 8-bit registers, two asynchronous read ports, one synchronous write port |
@@ -633,6 +659,7 @@ flowchart TD
 │   ├── pc.vhd
 │   ├── sp.vhd
 │   ├── memory.vhd
+│   ├── program.mem
 │   ├── ir.vhd
 │   ├── control_unit.vhd
 │   ├── reg_file.vhd
@@ -673,7 +700,7 @@ flowchart TD
 ## Running the simulation
 
 1. Create a new RTL project in Vivado.
-2. **Add design sources:** every file in `rtl/`.
+2. **Add design sources:** every file in `rtl/`, including `program.mem`. Vivado lists it as a memory file and copies it into the simulation folder, which is where `memory.vhd` opens it.
 3. **Add simulation sources:** every file in `tb/`.
 4. **Compile order:** `cpu_pkg.vhd` must compile first (it is used by `alu`, `control_unit`, `memory`, `cpu` and several testbenches). Right-click in Sources → **Hierarchy Update** → **Automatic Update and Compile Order**, then check the **Compile Order** tab.
 5. **Run time:** the default 1000 ns is too short for `tb_control_unit` and `tb_cpu`. Set **Settings → Simulation → Simulation → `xsim.simulate.runtime`** to `5000ns`.
@@ -714,7 +741,7 @@ The full report is in [`synthesis/cpu_utilization_synth.rpt`](synthesis/cpu_util
 | Bonded IOB | 55 | `clk`, `rst` and the 53 debug output bits |
 | BUFGCTRL | 1 | Clock buffer |
 
-- **Block RAM:** the synthesis log's *Block RAM: Final Mapping Report* lists `u_memory/mem_reg` as 256 x 8, READ_FIRST, on one RAMB18. No attribute was needed: the synchronous, read-first, single-address `memory.vhd` is inferred as block RAM as written. The program image from `init_mem` becomes the RAM's initial contents.
+- **Block RAM:** the synthesis log's *Block RAM: Final Mapping Report* lists `u_memory/mem_reg` as 256 x 8, READ_FIRST, on one RAMB18. No attribute was needed: the synchronous, read-first, single-address `memory.vhd` is inferred as block RAM as written. The program image from `load_mem` (read from `program.mem`) becomes the RAM's initial contents.
 - **FSM:** Vivado recognises the control unit as a state machine and re-encodes the six states one-hot (hence 6 state registers instead of 3).
 - **Registers that reset to 1:** five of the registers are `FDSE` (set on reset): the four set bits of SP's reset value `F0` and the FETCH1 bit of the one-hot state.
 - **Messages:** 0 errors, 0 critical warnings, 0 warnings. One info message (`Synth 8-7052`) notes that timing could improve with an extra output register merged into the block RAM; that would make every read take two clocks, so it is not used.
@@ -732,7 +759,7 @@ Every testbench is self-checking (`assert ... severity failure`). The clocked FS
 | `tb_mux2` | 10 | Both select values over several bit patterns | 100 ns |
 | `tb_wb_mux` | 6 | All four writeback paths | 60 ns |
 | `tb_alu` | 32 | Every operation including SHL/SHR/INC/DEC, carry/borrow and wrap edge cases, spare codes | 320 ns |
-| `tb_memory` | 15 | Program bytes from `init_mem`, empty and top addresses, read-first writes, writes to data and code, blocked write, read latency | 150 ns |
+| `tb_memory` | 15 | Program bytes loaded from `program.mem`, empty and top addresses, read-first writes, writes to data and code, blocked write, read latency | 150 ns |
 | `tb_pc` | 11 | Reset, increment, hold, load priority, wrap | 120 ns |
 | `tb_sp` | 10 | Reset to F0, decrement, increment, hold, decrement-over-increment and reset priority, timing | 100 ns |
 | `tb_ir` | 11 | Reset, each byte load alone, full assembly, hold, multi-byte loads, reset priority, load timing | 110 ns |
@@ -746,6 +773,8 @@ In `tb_control_unit` the opcode changes only during FETCH1. `mem_addr_sel`, `sp_
 `tb_ir` loads two and three bytes at once (`111`, `101`), which would fail if the byte enables were a priority chain.
 
 ### System test program
+
+The program in `rtl/program.mem`:
 
 | Instr | Addr | Instruction | Bytes | Effect |
 |---|---|---|---|---|
@@ -1238,25 +1267,29 @@ Key checks: CALL 5A at cycle 115 drops SP to `EF` and lands at `5A` (cycle 116);
 
 ## Writing your own program
 
-Programs live in the `prog_data` constant in `memory.vhd`, one 24-bit word per instruction, built from `cpu_pkg` constants as `opcode & rd & rs & imm`. `init_mem` splits them into bytes:
+Edit `rtl/program.mem` (format in [Program file](#program-file)): one
+instruction per line as `opcode`, `rd rs` (one hex digit each) and `imm`.
+Opcodes are in the [instruction set](#instructions) table. Registers R0-R3 are
+`0`-`3`.
 
-```vhdl
-constant prog_data : prog_type := (
-    0 => OP_LDI & REG0 & REG0 & x"05",   -- LDI R0, 05   counter
-    1 => OP_DEC & REG0 & REG0 & x"00",   -- DEC R0
-    2 => OP_JNZ & REG0 & REG0 & x"03",   -- JNZ 03       loop until R0 = 0
-    3 => OP_JMP & REG0 & REG0 & x"09"    -- JMP 09       halt
-);
+```
+-- countdown loop
+010005   -- 00: LDI R0, 05   counter
+130000   -- 03: DEC R0
+0E0003   -- 06: JNZ 03       loop until R0 = 0
+0C0009   -- 09: JMP 09       halt
 ```
 
 - **Jump targets are byte addresses:** instruction *n* starts at 3 x *n*. In the example, `DEC` is instruction 1 at `03` and `JMP` is instruction 3 at `09`.
-- Put `REG0` and `x"00"` in unused fields.
+- Put `0` in unused register fields and `00` in an unused imm.
+- Writing the byte address as a comment after each line (as above) makes jump targets easy to check.
 - For a pointer, load an address into a register and use `LDR rd, [rs]` / `STR rd, [rs]`; `INC`/`DEC` the register to step through memory.
 - Keep code well below `EF`: the stack grows down from `EF` towards your code, one byte per PUSH or CALL. Data goes at `F0`-`FF`.
 - Every `CALL` needs a matching `RET`, and every `PUSH` a matching `POP`, or the return address will be wrong.
 - Subroutines go after the halt, so the main program never runs into them.
 - End with a `JMP` to its own address.
 - After changing the program, update `tb_memory.vhd` and the expected trace in `tb_cpu.vhd`. Remember each instruction takes 5 or 6 cycles.
+- A different file can be loaded by setting the `init_file` generic of `memory`.
 
 ---
 
@@ -1270,12 +1303,12 @@ constant prog_data : prog_type := (
 - Code, data and stack share 256 bytes; nothing protects the code from ST, or from a stack that grows too deep.
 - No stack overflow or underflow detection: SP wraps.
 - Every instruction fetches all three bytes, even when it does not use rd/rs or imm.
-- The program is fixed in `memory.vhd`, and memory is not reloaded by a CPU reset.
+- The program is loaded once at simulation start; a CPU reset does not reload memory.
+- Programs are written as hex by hand (no assembler).
 - Synthesis only: not implemented, timed or run on a board.
 
 ---
 
 ## Future work
 
-- **Load the memory from a text file** at simulation start, so programs can change without editing VHDL.
-- **Simple assembler**: a script that turns assembly text into `prog_data`, so programs no longer have to be encoded by hand.
+- **Simple assembler**: a script that turns assembly text into `program.mem`, so programs no longer have to be encoded by hand.

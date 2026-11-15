@@ -1,12 +1,12 @@
 --------------------------------------------------------------------------------
 -- File        : tb_memory.vhd
 -- Description : Self-checking testbench for memory. Checks the program bytes
---               loaded by init_mem, empty and top addresses, read-first
+--               loaded from program.mem, empty and top addresses, read-first
 --               writes, writes to both data and code, and read latency.
 -- Notes       : Synchronous read: each check sees the address applied in the
 --               previous cycle. Prints "all tests completed and passed" at
---               150 ns. Expected program bytes must be updated if the program
---               changes.
+--               150 ns. Expected program bytes must be updated if
+--               program.mem changes.
 --------------------------------------------------------------------------------
 
 library ieee;

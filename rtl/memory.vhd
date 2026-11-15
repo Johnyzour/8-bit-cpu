@@ -6,20 +6,32 @@
 --               shows the byte at addr one clock after the address is applied.
 --               A write and a read of the same address on the same edge return
 --               the old byte (read-first).
---               Each 24-bit instruction is stored as three bytes at 3n, 3n+1,
---               3n+2: opcode, rd/rs, imm. Code starts at 00; data uses F0-FF;
---               the stack grows down from EF.
---               To change the program, edit the program constant; init_mem
---               splits it into bytes. Unused addresses hold 00 (NOP).
+--               The program is loaded at elaboration from the text file
+--               init_file (default program.mem): one 24-bit instruction per
+--               line as 6 hex digits, stored as three bytes at 3n, 3n+1,
+--               3n+2: opcode, rd/rs, imm. Blank lines and lines that start
+--               with a dash (comments, --) are skipped; text after the 6
+--               digits is ignored. Lines must not start with spaces. At most
+--               85 instructions; a bad line or a longer program stops
+--               elaboration with an error.
+--               The line is read only with textio read/hread (no indexing),
+--               so the same code works in simulation and in synthesis.
+--               Code starts at 00; data uses F0-FF; the stack grows down from
+--               EF. Unused addresses hold 00 (NOP).
 --               No reset: contents survive a CPU reset.
 --------------------------------------------------------------------------------
 
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.std_logic_textio.all;
 use ieee.numeric_std.all;
+use std.textio.all;
 use work.cpu_pkg.all;
 
 entity memory is
+    generic (
+        init_file : string := "program.mem"
+    );
     port ( 
         clk      : in  std_logic;
         wr_en    : in  std_logic;
@@ -31,76 +43,76 @@ end entity memory;
 
 architecture rtl of memory is
     type mem_type  is array (0 to 255) of std_logic_vector (7 downto 0);
-    type prog_type is array (natural range <>) of std_logic_vector (23 downto 0);
     
-    constant prog_data : prog_type := (
-        0  => OP_LDI  & REG0 & REG0 & x"0F",   -- LDI R0, 0F
-        1  => OP_LDI  & REG1 & REG0 & x"3C",   -- LDI R1, 3C
-        2  => OP_MOV  & REG2 & REG1 & x"00",   -- MOV R2, R1      R2 = 3C
-        3  => OP_ADD  & REG2 & REG0 & x"00",   -- ADD R2, R0      R2 = 4B
-        4  => OP_AND  & REG2 & REG1 & x"00",   -- AND R2, R1      R2 = 08
-        5  => OP_OR   & REG2 & REG0 & x"00",   -- OR  R2, R0      R2 = 0F
-        6  => OP_XOR  & REG2 & REG0 & x"00",   -- XOR R2, R0      R2 = 00, Z = 1
-        7  => OP_JZ   & REG0 & REG0 & x"1B",   -- JZ 1B           taken
-        8  => OP_LDI  & REG3 & REG0 & x"FF",   -- LDI R3, FF      must be skipped
-        9  => OP_NOT  & REG2 & REG0 & x"00",   -- NOT R2          R2 = FF
-        10 => OP_ST   & REG2 & REG0 & x"F0",   -- ST R2, F0       MEM[F0] = FF
-        11 => OP_LD   & REG3 & REG0 & x"F0",   -- LD R3, F0       R3 = FF
-        12 => OP_SUB  & REG0 & REG1 & x"00",   -- SUB R0, R1      R0 = D3, C = 1
-        13 => OP_JC   & REG0 & REG0 & x"2D",   -- JC 2D           taken
-        14 => OP_LDI  & REG3 & REG0 & x"00",   -- LDI R3, 00      must be skipped
-        15 => OP_CMP  & REG3 & REG2 & x"00",   -- CMP R3, R2      Z = 1, R3 unchanged
-        16 => OP_JNZ  & REG0 & REG0 & x"99",   -- JNZ 99          not taken
-        17 => OP_NOP  & REG0 & REG0 & x"00",   -- NOP
-        18 => OP_INC  & REG2 & REG0 & x"00",   -- INC R2          R2 = 00, Z = 1, C = 1
-        19 => OP_DEC  & REG1 & REG0 & x"00",   -- DEC R1          R1 = 3B
-        20 => OP_SHL  & REG0 & REG0 & x"00",   -- SHL R0          R0 = A6, C = 1
-        21 => OP_SHR  & REG0 & REG0 & x"00",   -- SHR R0          R0 = 53, C = 0
-        22 => OP_CALL & REG0 & REG0 & x"5A",   -- CALL 5A         SP = EF, MEM[EF] = 45
-        23 => OP_PUSH & REG0 & REG0 & x"00",   -- PUSH R0         SP = EF, MEM[EF] = 54
-        24 => OP_POP  & REG2 & REG0 & x"00",   -- POP R2          R2 = 54, SP = F0
-        25 => OP_LDI  & REG3 & REG0 & x"03",   -- LDI R3, 03      loop counter
-        26 => OP_CALL & REG0 & REG0 & x"69",   -- CALL 69         loop: R0 = R0 + 1
-        27 => OP_DEC  & REG3 & REG0 & x"00",   -- DEC R3
-        28 => OP_JNZ  & REG0 & REG0 & x"4E",   -- JNZ 4E          3 times, then R0 = 57
-        29 => OP_JMP  & REG0 & REG0 & x"6F",   -- JMP 6F          to the register-indirect section
-        30 => OP_PUSH & REG1 & REG0 & x"00",   -- PUSH R1         SP = EE, MEM[EE] = 3B
-        31 => OP_LDI  & REG1 & REG0 & x"77",   -- LDI R1, 77      R1 = 77
-        32 => OP_CALL & REG0 & REG0 & x"69",   -- CALL 69         nested: SP = ED, MEM[ED] = 63
-        33 => OP_POP  & REG1 & REG0 & x"00",   -- POP R1          R1 = 3B, SP = EF
-        34 => OP_RET  & REG0 & REG0 & x"00",   -- RET             PC = 45, SP = F0
-        35 => OP_INC  & REG0 & REG0 & x"00",   -- INC R0
-        36 => OP_RET  & REG0 & REG0 & x"00",   -- RET
-        37 => OP_LDI  & REG3 & REG0 & x"F1",   -- LDI R3, F1      pointer
-        38 => OP_STR  & REG0 & REG3 & x"00",   -- STR R0, [R3]    MEM[F1] = 57
-        39 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          pointer = F2
-        40 => OP_STR  & REG1 & REG3 & x"00",   -- STR R1, [R3]    MEM[F2] = 3B
-        41 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          pointer = F3
-        42 => OP_STR  & REG2 & REG3 & x"00",   -- STR R2, [R3]    MEM[F3] = 54
-        43 => OP_LDI  & REG0 & REG0 & x"00",   -- LDI R0, 00      sum
-        44 => OP_LDI  & REG3 & REG0 & x"F1",   -- LDI R3, F1      pointer back to F1
-        45 => OP_LDI  & REG2 & REG0 & x"03",   -- LDI R2, 03      counter
-        46 => OP_LDR  & REG1 & REG3 & x"00",   -- LDR R1, [R3]    loop: R1 = MEM[pointer]
-        47 => OP_ADD  & REG0 & REG1 & x"00",   -- ADD R0, R1      sum
-        48 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          next byte
-        49 => OP_DEC  & REG2 & REG0 & x"00",   -- DEC R2
-        50 => OP_JNZ  & REG0 & REG0 & x"8A",   -- JNZ 8A          3 times
-        51 => OP_JMP  & REG0 & REG0 & x"99"    -- JMP 99 (halt)   R0 = E6
-    );
-
-    function init_mem (prog_data : prog_type) return mem_type is
-        variable m : mem_type := (others => x"00");
+    -- Converts one hex character to 4 bits; ok = false if it is not hex.
+    procedure hex_digit (c  : in  character;
+                         v  : out std_logic_vector (3 downto 0);
+                         ok : out boolean) is
     begin
-        for i in prog_data'range loop
-            m(3*i)     := prog_data(i)(23 downto 16);
-            m(3*i + 1) := prog_data(i)(15 downto 8);
-            m(3*i + 2) := prog_data(i)(7 downto 0); 
-        end loop;
-        
-        return m;
-    end function init_mem;
+        ok := true;
+        case c is
+            when '0'       => v := x"0";
+            when '1'       => v := x"1";
+            when '2'       => v := x"2";
+            when '3'       => v := x"3";
+            when '4'       => v := x"4";
+            when '5'       => v := x"5";
+            when '6'       => v := x"6";
+            when '7'       => v := x"7";
+            when '8'       => v := x"8";
+            when '9'       => v := x"9";
+            when 'A' | 'a' => v := x"A";
+            when 'B' | 'b' => v := x"B";
+            when 'C' | 'c' => v := x"C";
+            when 'D' | 'd' => v := x"D";
+            when 'E' | 'e' => v := x"E";
+            when 'F' | 'f' => v := x"F";
+            when others    => v := x"0"; ok := false;
+        end case;
+    end procedure hex_digit;
 
-    signal mem : mem_type := init_mem(prog_data);
+    impure function load_mem (file_name : string) return mem_type is
+        file     f       : text open read_mode is file_name;
+        variable l       : line;
+        variable c       : character;
+        variable first   : std_logic_vector (3 downto 0);
+        variable rest    : std_logic_vector (19 downto 0);
+        variable word    : std_logic_vector (23 downto 0);
+        variable got_c   : boolean;
+        variable ok_c    : boolean;
+        variable ok_rest : boolean;
+        variable m       : mem_type := (others => x"00");
+        variable n       : natural  := 0;
+        variable line_no : natural  := 0;
+    begin
+        while not endfile(f) loop
+            readline(f, l);
+            line_no := line_no + 1;
+
+            read(l, c, got_c);                  -- first character; false on an empty line
+
+            if got_c and c /= '-' then          -- not blank, not a comment
+                hex_digit(c, first, ok_c);      -- first hex digit
+                hread(l, rest, ok_rest);        -- remaining 5 hex digits
+                assert ok_c and ok_rest
+                    report file_name & " line " & integer'image(line_no) & ": bad hex"
+                    severity failure;
+                assert n < 85
+                    report file_name & " line " & integer'image(line_no) & ": program too long (max 85 instructions)"
+                    severity failure;
+
+                word := first & rest;
+                m(3*n)     := word(23 downto 16);
+                m(3*n + 1) := word(15 downto 8);
+                m(3*n + 2) := word(7 downto 0);
+                n := n + 1;
+            end if;
+        end loop;
+
+        return m;
+    end function load_mem;
+          
+    signal mem : mem_type := load_mem(init_file);
 begin
     mem_proc : process (clk)
     begin
