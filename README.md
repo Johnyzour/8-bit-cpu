@@ -15,6 +15,9 @@ instructions, PUSH, POP, CALL and RET, so programs can save registers and call
 subroutines, including nested calls. The stack lives in the same shared memory,
 growing down from `EF`.
 
+LD and ST can also take their address from a register (**register-indirect
+addressing**, LDR and STR), so a program can walk through memory with a pointer.
+
 **Status:** RTL complete. All 11 testbenches pass.
 
 > **Branches**
@@ -23,7 +26,7 @@ growing down from `EF`.
 > |---|---|---|
 > | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete, frozen |
 > | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete, frozen |
-> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch, hardware stack with PUSH/POP/CALL/RET (tag `v1.2-multicycle-von-neumann`) | Actively under development (this branch) |
+> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch, hardware stack with PUSH/POP/CALL/RET, register-indirect LDR/STR (tag `v1.2-multicycle-von-neumann`) | Actively under development (this branch) |
 >
 > `single-cycle` and `multicycle` are frozen. All further development happens on `von-neumann`.
 
@@ -63,10 +66,11 @@ growing down from `EF`.
 - 8-bit data path, 8-bit program counter (256 byte addresses)
 - **Von Neumann architecture:** one 256 x 8 memory for code, data and the stack
 - Synchronous-read memory (block-RAM style), read-first on writes (simulation only; not yet synthesized)
-- 24-bit byte-aligned instruction word, 24 instructions (8-bit opcode, room for 256)
+- 24-bit byte-aligned instruction word, 26 instructions (8-bit opcode, room for 256)
 - Instructions fetched one byte per clock (FETCH1, FETCH2, FETCH3)
 - Four 8-bit general-purpose registers (R0-R3)
 - 8-bit stack pointer and a descending stack: PUSH, POP, CALL, RET, with nested calls
+- Direct (LD/ST) and register-indirect (LDR/STR) memory addressing
 - Zero (Z) and Carry (C) flags with independent load enables
 - **Multi-cycle execution:** 5 or 6 clocks per instruction, driven by a 6-state FSM
 - 24-bit instruction register (IR) with one load enable per byte
@@ -86,12 +90,12 @@ growing down from `EF`.
 | Instruction fetch | 1 clock, whole 24-bit word | 3 clocks, one byte each |
 | FSM states | 4 | 6 |
 | Clocks per instruction | 3 or 4 | 5 or 6 |
-| Address source | PC to ROM, imm to RAM | Address muxes: PC, imm for LD/ST, or SP for the stack |
+| Address source | PC to ROM, imm to RAM | Address muxes: PC, imm for LD/ST, SP for the stack, or a register for LDR/STR |
 | IR loading | 24 bits at once | One byte per state (`ir_load(2:0)`) |
 | Jump targets | Instruction index | Byte address (3 x instruction index) |
 | Code is writable | No | Yes: ST can overwrite instructions |
 | Stack and subroutines | No | Yes: SP, PUSH, POP, CALL, RET |
-| Test program, reset to first fetch of the halt `JMP` | 71 cycles | 255 cycles (longer program with subroutines) |
+| Test program, reset to first fetch of the halt `JMP` | 71 cycles | 394 cycles (longer program with subroutines and a pointer loop) |
 
 Both designs share the original 20 instructions, register file, ALU, flags register, writeback mux
 and PC. The multi-cycle structure is what makes the shared memory possible:
@@ -109,10 +113,10 @@ read. It has no reset, so its contents survive a CPU reset.
 
 | Range | Use |
 |---|---|
-| `00`-`6E` | Test program (37 instructions x 3 bytes) |
-| `6F`-`EC` | Free (reads as `00` = NOP) |
+| `00`-`9B` | Test program (52 instructions x 3 bytes) |
+| `9C`-`EC` | Free (reads as `00` = NOP) |
 | `ED`-`EF` | Stack used by the test program (grows down from `EF`) |
-| `F0`-`FF` | Data area used by LD/ST |
+| `F0`-`FF` | Data area used by LD/ST and LDR/STR (the test program uses `F0`-`F3`) |
 
 Nothing stops a program from writing into the code area, or a deep stack from
 growing into code: memory is just bytes.
@@ -145,6 +149,7 @@ applied, like FPGA block RAM. On a write edge the read returns the old byte
 - Each instruction byte is requested in one state and loaded into the IR in the next.
 - LD puts imm on the address in EXECUTE; the byte arrives in WRITEBACK, which is where the register file writes it.
 - POP and RET read the stack the same way: SP goes out in EXECUTE, the byte arrives in WRITEBACK.
+- LDR does the same with the address from a register.
 
 ---
 
@@ -180,15 +185,42 @@ All four fit into the existing six states; no new states were needed:
 - **CALL writes and jumps on the same edge:** the memory stores the old PC (the return address) while the PC loads imm.
 - **POP and RET read like LD:** the address is captured at the end of EXECUTE, before `sp_inc` changes SP, and the byte arrives in WRITEBACK.
 
-Three multiplexers were added to the datapath for the stack:
+Multiplexers added to the datapath for the stack (the address mux later gained a fourth input for register-indirect addressing):
 
 | Mux | Inputs | Select |
 |---|---|---|
-| Memory address (two cascaded `mux2`) | PC, imm, SP | `mem_addr_sel` (2 bits: `ADDR_PC`, `ADDR_IMM`, `ADDR_SP`) |
+| Memory address (three `mux2` as a 4-to-1) | PC, imm, SP, register | `mem_addr_sel` (2 bits: `ADDR_PC`, `ADDR_IMM`, `ADDR_SP`, `ADDR_REG`) |
 | Memory write data | `reg_a`, PC | `mem_data_sel` (`MEMD_REG`, `MEMD_PC`) |
 | PC jump address | imm, memory output | `pc_src_sel` (`PCSRC_IMM`, `PCSRC_MEM`) |
 
 There is no overflow or underflow detection: SP simply wraps.
+
+---
+
+## Register-indirect addressing
+
+LD and ST take their address from imm, which is fixed in the program. LDR and
+STR take it from the **rs register** instead, so the address can be computed
+and changed at run time (a pointer):
+
+| Opcode | Instruction | Operation | Path | Clocks |
+|---|---|---|---|---|
+| 18 | `LDR rd, [rs]` | rd = MEM[rs] | like LD: F1 F2 F3 D E W | 6 |
+| 19 | `STR rd, [rs]` | MEM[rs] = rd | like ST: F1 F2 F3 D E | 5 |
+
+In both, **rd is the data register and rs holds the address**. `reg_b` already
+carries R[rs] from DECODE, so the address is ready in EXECUTE; the only change
+from LD/ST is `mem_addr_sel = ADDR_REG` instead of `ADDR_IMM`.
+
+The address mux became a 4-to-1, built from three `mux2` in the same shape as
+`wb_mux`:
+
+| `mem_addr_sel` | Constant | `u_addr_mux` (bit 0) | `u_addr_mux_hi` (bit 0) | `u_addr_mux_sp` (bit 1) | Address |
+|---|---|---|---|---|---|
+| `00` | `ADDR_PC` | PC | | `addr_a` | PC |
+| `01` | `ADDR_IMM` | imm | | `addr_a` | imm |
+| `10` | `ADDR_SP` | | SP | `addr_b` | SP |
+| `11` | `ADDR_REG` | | `reg_b` (rs) | `addr_b` | rs register |
 
 ---
 
@@ -201,7 +233,7 @@ There is no overflow or underflow detection: SP simply wraps.
 | Memory model | Von Neumann: one memory for code and data | The point of this branch. Fetch and data access are in different FSM states, so one port is enough |
 | Memory width | 8 bits | Matches the data width; a 24-bit instruction is three bytes with no wasted bits |
 | Memory read | Synchronous, read-first | Matches FPGA block RAM; the FSM absorbs the one-clock latency |
-| Address source | Two cascaded `mux2` selecting PC, imm or SP (`mem_addr_sel`, 2 bits) | PC for every fetch; imm in EXECUTE for LD and ST; SP in EXECUTE for the stack instructions |
+| Address source | Three `mux2` as a 4-to-1 selecting PC, imm, SP or a register (`mem_addr_sel`, 2 bits) | PC for every fetch; imm in EXECUTE for LD and ST; SP for the stack instructions; rs for LDR and STR |
 | Stack | SP points to the last pushed byte, grows down from `F0`; reset to `F0` | Standard convention; keeps the stack out of the data area `F0`-`FF` |
 | Stack in the FSM | Decrement in DECODE, access in EXECUTE, use popped byte in WRITEBACK | Fits PUSH/POP/CALL/RET into the existing six states |
 | Fetch | Three states, one byte each, PC +1 in each | Keeps the 24-bit format from the `multicycle` branch unchanged |
@@ -225,7 +257,9 @@ flowchart LR
     PC["Program Counter<br/>pc"] -->|"pc_val"| AM1["u_addr_mux<br/>mux2"]
     IMM -->|"imm"| AM1
     AM1 -->|"addr_a"| AM2["u_addr_mux_sp<br/>mux2"]
-    SP["Stack Pointer<br/>sp"] -->|"sp_val"| AM2
+    SP["Stack Pointer<br/>sp"] -->|"sp_val"| AM3["u_addr_mux_hi<br/>mux2"]
+    RF -->|"reg_b (rs)"| AM3
+    AM3 -->|"addr_b"| AM2
     AM2 -->|"mem_addr"| MEM["Shared Memory<br/>memory<br/>256 x 8"]
 
     RF -->|"reg_a (rd)"| DM["u_data_mux<br/>mux2"]
@@ -260,6 +294,7 @@ flowchart LR
     CU -. "sp_inc, sp_dec" .-> SP
     CU -. "mem_addr_sel (2)" .-> AM1
     CU -. "mem_addr_sel (2)" .-> AM2
+    CU -. "mem_addr_sel (2)" .-> AM3
     CU -. "mem_data_sel" .-> DM
     CU -. "pc_src_sel" .-> PM
     CU -. "mem_wr_en" .-> MEM
@@ -272,19 +307,21 @@ flowchart LR
 Solid arrows are data; dotted arrows are control signals from the FSM.
 
 Compared with the `multicycle` branch: the ROM and RAM are replaced by one
-`memory`; two cascaded address muxes choose the PC, imm or SP; the memory
+`memory`; three address muxes choose the PC, imm, SP or a register; the memory
 output feeds the IR (one byte at a time), the writeback mux and the PC (for
 RET); the memory write data is a register or the PC (for CALL); and the IR has
 three byte enables.
 
 The address muxes decode `mem_addr_sel` directly: bit 0 picks PC or imm in
-`u_addr_mux`, bit 1 picks that result or SP in `u_addr_mux_sp`.
+`u_addr_mux` and SP or the rs register in `u_addr_mux_hi`; bit 1 picks between
+the two in `u_addr_mux_sp`.
 
 | `mem_addr_sel` | Constant | Address |
 |---|---|---|
 | `00` | `ADDR_PC` | PC |
 | `01` | `ADDR_IMM` | imm |
 | `10` | `ADDR_SP` | SP |
+| `11` | `ADDR_REG` | rs register |
 
 ### Control FSM
 
@@ -296,8 +333,8 @@ stateDiagram-v2
     FETCH3 --> DECODE
     DECODE --> WRITEBACK: LDI, MOV
     DECODE --> EXECUTE: all other opcodes
-    EXECUTE --> WRITEBACK: ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, POP, RET
-    EXECUTE --> FETCH1: NOP, ST, CMP, JMP, JZ, JNZ, JC, PUSH, CALL, unused
+    EXECUTE --> WRITEBACK: ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, LDR, POP, RET
+    EXECUTE --> FETCH1: NOP, ST, STR, CMP, JMP, JZ, JNZ, JC, PUSH, CALL, unused
     WRITEBACK --> FETCH1
 ```
 
@@ -307,8 +344,8 @@ stateDiagram-v2
 | FETCH2 | PC | Opcode arrives and loads into IR(23:16); request byte 1; PC increments | `pc_inc`, `ir_load = 100` |
 | FETCH3 | PC | rd/rs byte loads into IR(15:8); request byte 2; PC increments | `pc_inc`, `ir_load = 010` |
 | DECODE | PC | imm byte loads into IR(7:0); next state chosen from the opcode; SP decrements for PUSH/CALL | `ir_load = 001`, `sp_dec` (PUSH, CALL) |
-| EXECUTE | imm for LD/ST, SP for PUSH/POP/CALL/RET, otherwise PC | ALU result settles; flags load; ST/PUSH/CALL write memory; LD/POP/RET request their byte; jumps and CALL load the PC; SP increments for POP/RET | `z_load`, `c_load`, `mem_wr_en`, `pc_load`, `sp_inc` (per opcode) |
-| WRITEBACK | PC | Result (or LD/POP byte) written to rd; RET loads the PC from the popped byte instead | `reg_wr_en`, or `pc_load` for RET |
+| EXECUTE | imm for LD/ST, rs for LDR/STR, SP for PUSH/POP/CALL/RET, otherwise PC | ALU result settles; flags load; ST/STR/PUSH/CALL write memory; LD/LDR/POP/RET request their byte; jumps and CALL load the PC; SP increments for POP/RET | `z_load`, `c_load`, `mem_wr_en`, `pc_load`, `sp_inc` (per opcode) |
+| WRITEBACK | PC | Result (or LD/LDR/POP byte) written to rd; RET loads the PC from the popped byte instead | `reg_wr_en`, or `pc_load` for RET |
 
 ### Fetch timing
 
@@ -331,9 +368,9 @@ nothing reads the stale bytes.
 
 | Instructions | Path | Clocks |
 |---|---|---|
-| NOP, ST, CMP, JMP, JZ, JNZ, JC, PUSH, CALL, unused opcodes | FETCH1 → FETCH2 → FETCH3 → DECODE → EXECUTE | 5 |
+| NOP, ST, STR, CMP, JMP, JZ, JNZ, JC, PUSH, CALL, unused opcodes | FETCH1 → FETCH2 → FETCH3 → DECODE → EXECUTE | 5 |
 | LDI, MOV | FETCH1 → FETCH2 → FETCH3 → DECODE → WRITEBACK | 5 |
-| ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, POP, RET | FETCH1 → FETCH2 → FETCH3 → DECODE → EXECUTE → WRITEBACK | 6 |
+| ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, LDR, POP, RET | FETCH1 → FETCH2 → FETCH3 → DECODE → EXECUTE → WRITEBACK | 6 |
 
 ### Writeback multiplexer
 
@@ -353,7 +390,7 @@ flowchart LR
 | wb_sel | Constant | Source | Used by |
 |---|---|---|---|
 | 00 | `WB_ALU` | ALU result | ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC |
-| 01 | `WB_RAM` | Shared memory | LD, POP |
+| 01 | `WB_RAM` | Shared memory | LD, LDR, POP |
 | 10 | `WB_IMM` | Immediate | LDI |
 | 11 | `WB_REG` | rs register | MOV |
 
@@ -361,8 +398,8 @@ flowchart LR
 
 ## Instruction set
 
-The `multicycle` branch's 20 instructions plus the four stack instructions.
-Jump, CALL and LD/ST addresses are byte addresses in the shared memory.
+The `multicycle` branch's 20 instructions, plus the four stack instructions and the two register-indirect loads and stores.
+Jump, CALL and LD/ST addresses, and the pointers in LDR/STR, are byte addresses in the shared memory.
 
 ### Instruction format
 
@@ -407,7 +444,9 @@ digits 5-6 are imm.
 | 15 | `POP rd` | rd = MEM[SP], SP = SP + 1 | - |
 | 16 | `CALL addr` | SP = SP - 1, MEM[SP] = return address, PC = addr | - |
 | 17 | `RET` | PC = MEM[SP], SP = SP + 1 | - |
-| 18-FF | (unused) | Behaves as NOP | - |
+| 18 | `LDR rd, [rs]` | rd = MEM[rs] | - |
+| 19 | `STR rd, [rs]` | MEM[rs] = rd | - |
+| 1A-FF | (unused) | Behaves as NOP | - |
 
 `JMP` to its own address acts as a halt (the FSM keeps cycling FETCH1 to EXECUTE on it).
 
@@ -472,7 +511,7 @@ The state type `state_t`, the select constants `ADDR_*`, `MEMD_*` and `PCSRC_*`,
 | FETCH3 | always | DECODE |
 | DECODE | LDI, MOV | WRITEBACK |
 | DECODE | otherwise | EXECUTE |
-| EXECUTE | ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, POP, RET | WRITEBACK |
+| EXECUTE | ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC, LD, LDR, POP, RET | WRITEBACK |
 | EXECUTE | otherwise | FETCH1 |
 | WRITEBACK | always | FETCH1 |
 
@@ -486,7 +525,7 @@ The state type `state_t`, the select constants `ADDR_*`, `MEMD_*` and `PCSRC_*`,
 | SHL / SHR / INC / DEC | SHL / SHR / INC / DEC | ALU | REG | IMM |
 | LDI | ADD | IMM | REG | IMM |
 | MOV | ADD | REG | REG | IMM |
-| LD, POP | ADD | RAM | REG | IMM |
+| LD, LDR, POP | ADD | RAM | REG | IMM |
 | CALL | ADD | ALU | **PC** | IMM |
 | RET | ADD | ALU | REG | **MEM** |
 | others | ADD | ALU | REG | IMM |
@@ -504,6 +543,8 @@ The state type `state_t`, the select constants `ADDR_*`, `MEMD_*` and `PCSRC_*`,
 | EXECUTE | AND, OR, XOR, NOT | `z_load` |
 | EXECUTE | LD | `mem_addr_sel = ADDR_IMM` |
 | EXECUTE | ST | `mem_wr_en`, `mem_addr_sel = ADDR_IMM` |
+| EXECUTE | LDR | `mem_addr_sel = ADDR_REG` |
+| EXECUTE | STR | `mem_wr_en`, `mem_addr_sel = ADDR_REG` |
 | EXECUTE | JMP | `pc_load` |
 | EXECUTE | JZ / JNZ / JC | `pc_load` = Z / not Z / C |
 | EXECUTE | PUSH | `mem_wr_en`, `mem_addr_sel = ADDR_SP` |
@@ -522,18 +563,18 @@ The state type `state_t`, the select constants `ADDR_*`, `MEMD_*` and `PCSRC_*`,
 
 | Entity | File | Type | Description |
 |---|---|---|---|
-| `cpu_pkg` | `cpu_pkg.vhd` | Package | 8-bit `OP_*`, 4-bit `ALU_*`, 4-bit `REG0`-`REG3`, 2-bit `WB_*`, 2-bit `ADDR_*`, `MEMD_*`, `PCSRC_*`, `SP_INIT`, and the FSM state type `state_t` |
+| `cpu_pkg` | `cpu_pkg.vhd` | Package | 8-bit `OP_*`, 4-bit `ALU_*`, 4-bit `REG0`-`REG3`, 2-bit `WB_*`, 2-bit `ADDR_*` (including `ADDR_REG`), `MEMD_*`, `PCSRC_*`, `SP_INIT`, and the FSM state type `state_t` |
 | `cpu` | `cpu.vhd` | Structural | Top level; instantiates and wires every component. Exposes debug outputs |
 | `pc` | `pc.vhd` | Sequential | 8-bit program counter. Priority: reset > load > increment > hold |
 | `sp` | `sp.vhd` | Sequential | **New.** 8-bit stack pointer, resets to `F0`. Priority: reset > decrement > increment > hold |
 | `memory` | `memory.vhd` | Sequential | **New.** 256 x 8 shared memory, synchronous read-first, initialised with the program, no reset |
 | `ir` | `ir.vhd` | Sequential | **Changed.** 24-bit instruction register loaded one byte at a time |
-| `control_unit` | `control_unit.vhd` | Sequential (FSM) | **Changed.** 6-state control FSM, including the stack instructions |
+| `control_unit` | `control_unit.vhd` | Sequential (FSM) | **Changed.** 6-state control FSM, including the stack and register-indirect instructions |
 | `reg_file` | `reg_file.vhd` | Sequential | 4 x 8-bit registers, two asynchronous read ports, one synchronous write port |
 | `alu` | `alu.vhd` | Combinational | ADD, SUB, AND, OR, XOR, NOT, SHL, SHR, INC, DEC with zero and carry outputs |
 | `flags_reg` | `flags_reg.vhd` | Sequential | Stores Z and C with independent load enables |
 | `wb_mux` | `wb_mux.vhd` | Structural | 4-to-1 writeback multiplexer built from three `mux2` |
-| `mux2` | `mux2.vhd` | Combinational | 8-bit 2-to-1 multiplexer (gate-level); also used for the memory address, memory data and PC source muxes |
+| `mux2` | `mux2.vhd` | Combinational | 8-bit 2-to-1 multiplexer (gate-level); also used for the three memory address muxes, the memory data mux and the PC source mux |
 
 `instr_rom` and `data_ram` from the `multicycle` branch are not used here.
 
@@ -544,6 +585,7 @@ flowchart TD
     CPU["cpu"] --> PC["pc"]
     CPU --> SP["sp"]
     CPU --> AM["mux2 (u_addr_mux)"]
+    CPU --> AM3["mux2 (u_addr_mux_hi)"]
     CPU --> AM2["mux2 (u_addr_mux_sp)"]
     CPU --> DM["mux2 (u_data_mux)"]
     CPU --> PM["mux2 (u_pc_src_mux)"]
@@ -629,7 +671,7 @@ flowchart TD
 2. **Add design sources:** every file in `rtl/`.
 3. **Add simulation sources:** every file in `tb/`.
 4. **Compile order:** `cpu_pkg.vhd` must compile first (it is used by `alu`, `control_unit`, `memory`, `cpu` and several testbenches). Right-click in Sources → **Hierarchy Update** → **Automatic Update and Compile Order**, then check the **Compile Order** tab.
-5. **Run time:** the default 1000 ns is too short for `tb_control_unit` and `tb_cpu`. Set **Settings → Simulation → Simulation → `xsim.simulate.runtime`** to `3000ns`.
+5. **Run time:** the default 1000 ns is too short for `tb_control_unit` and `tb_cpu`. Set **Settings → Simulation → Simulation → `xsim.simulate.runtime`** to `5000ns`.
 6. Right-click the testbench to run → **Set as Top**.
 7. **Run Simulation** → **Run Behavioral Simulation**.
 8. Check the Tcl Console for `Note: all tests completed and passed`.
@@ -663,8 +705,8 @@ Every testbench is self-checking (`assert ... severity failure`). The clocked FS
 | `tb_ir` | 11 | Reset, each byte load alone, full assembly, hold, multi-byte loads, reset priority, load timing | 110 ns |
 | `tb_flags_reg` | 9 | Independent flag loads, hold, reset priority, timing | 90 ns |
 | `tb_reg_file` | 14 | Every register, both ports, reset priority, timing | 140 ns |
-| `tb_control_unit` | 159 | Every opcode through its full state sequence, including IR byte loads, memory address and data selects, SP enables and the PC source; each conditional jump both ways; PUSH, POP, CALL, RET; an unused opcode as NOP; reset mid-instruction | 1590 ns |
-| `tb_cpu` | 270 cycles | Full program with nested subroutine calls and a call in a loop; FSM state and all debug outputs, including SP, every cycle | 2700 ns |
+| `tb_control_unit` | 170 | Every opcode through its full state sequence, including IR byte loads, memory address and data selects, SP enables and the PC source; each conditional jump both ways; PUSH, POP, CALL, RET, LDR, STR; an unused opcode as NOP; reset mid-instruction | 1700 ns |
+| `tb_cpu` | 414 cycles | Full program with nested subroutine calls, a call in a loop and a pointer loop with LDR/STR; FSM state and all debug outputs, including SP, every cycle | 4140 ns |
 
 In `tb_control_unit` the opcode changes only during FETCH1. `mem_addr_sel`, `sp_inc` and `sp_dec` are checked in every state, so a fetch from the wrong address would be caught. The unused-opcode test (`FF`) runs with both flags set, proving an unknown opcode can never trigger a jump.
 
@@ -690,7 +732,7 @@ In `tb_control_unit` the opcode changes only during FETCH1. `mem_addr_sel`, `sp_
 | 13 | `27` | `JC 2D` | `0F 00 2D` | Taken |
 | 14 | `2A` | `LDI R3, 00` | `01 30 00` | Must be skipped |
 | 15 | `2D` | `CMP R3, R2` | `0B 32 00` | Z = 1, C = 0, R3 unchanged |
-| 16 | `30` | `JNZ 57` | `0E 00 57` | Not taken |
+| 16 | `30` | `JNZ 99` | `0E 00 99` | Not taken |
 | 17 | `33` | `NOP` | `00 00 00` |  |
 | 18 | `36` | `INC R2` | `12 20 00` | R2 = 00 (FF wraps), Z = 1, C = 1 |
 | 19 | `39` | `DEC R1` | `13 10 00` | R1 = 3B, Z = 0, C = 0 |
@@ -703,7 +745,7 @@ In `tb_control_unit` the opcode changes only during FETCH1. `mem_addr_sel`, `sp_
 | 26 | `4E` | `CALL 69` | `16 00 69` | Loop body: call subroutine 2 |
 | 27 | `51` | `DEC R3` | `13 30 00` |  |
 | 28 | `54` | `JNZ 4E` | `0E 00 4E` | Taken twice, then falls through (R0 = 57) |
-| 29 | `57` | `JMP 57` | `0C 00 57` | Halt |
+| 29 | `57` | `JMP 6F` | `0C 00 6F` | On to the register-indirect section |
 | 30 | `5A` | `PUSH R1` | `14 10 00` | Subroutine 1: SP = EE, MEM[EE] = 3B |
 | 31 | `5D` | `LDI R1, 77` | `01 10 77` | R1 = 77 (clobber) |
 | 32 | `60` | `CALL 69` | `16 00 69` | Nested call: SP = ED, MEM[ED] = 63 |
@@ -711,8 +753,23 @@ In `tb_control_unit` the opcode changes only during FETCH1. `mem_addr_sel`, `sp_
 | 34 | `66` | `RET` | `17 00 00` | PC = 45, SP = F0 |
 | 35 | `69` | `INC R0` | `12 00 00` | Subroutine 2: R0 = R0 + 1 |
 | 36 | `6C` | `RET` | `17 00 00` |  |
+| 37 | `6F` | `LDI R3, F1` | `01 30 F1` | Pointer |
+| 38 | `72` | `STR R0, [R3]` | `19 03 00` | MEM[F1] = 57 |
+| 39 | `75` | `INC R3` | `12 30 00` | Pointer = F2 |
+| 40 | `78` | `STR R1, [R3]` | `19 13 00` | MEM[F2] = 3B |
+| 41 | `7B` | `INC R3` | `12 30 00` | Pointer = F3 |
+| 42 | `7E` | `STR R2, [R3]` | `19 23 00` | MEM[F3] = 54 |
+| 43 | `81` | `LDI R0, 00` | `01 00 00` | Sum |
+| 44 | `84` | `LDI R3, F1` | `01 30 F1` | Pointer back to F1 |
+| 45 | `87` | `LDI R2, 03` | `01 20 03` | Counter |
+| 46 | `8A` | `LDR R1, [R3]` | `18 13 00` | Loop: R1 = MEM[pointer] |
+| 47 | `8D` | `ADD R0, R1` | `05 01 00` | Sum |
+| 48 | `90` | `INC R3` | `12 30 00` | Next byte |
+| 49 | `93` | `DEC R2` | `13 20 00` |  |
+| 50 | `96` | `JNZ 8A` | `0E 00 8A` | Taken twice, then falls through |
+| 51 | `99` | `JMP 99` | `0C 00 99` | Halt (R0 = E6) |
 
-**Final state:** R0 = `57`, R1 = `3B`, R2 = `54`, R3 = `00`, Z = 1, C = 0, SP = `F0`. The stack reached a depth of 3 (`ED`-`EF`) during the nested call.
+**Final state:** R0 = `E6` (57 + 3B + 54), R1 = `54`, R2 = `00`, R3 = `F4`, Z = 1, C = 0, SP = `F0`; MEM[F0-F3] = `FF 57 3B 54`. The stack reached a depth of 3 (`ED`-`EF`) during the nested call.
 
 ### Expected trace
 
@@ -723,7 +780,7 @@ How to read it:
 - **The IR fills one byte per state.** During FETCH2, FETCH3 and DECODE it holds a mix of the new and the previous instruction's bytes; it is complete from EXECUTE (or WRITEBACK for LDI/MOV). Cycle 0 shows `000000` from reset.
 - **Results appear one state later**: a WRITEBACK's value is visible at the next FETCH1; flags loaded in EXECUTE are visible from the next state.
 - **SP changes at the end of DECODE** (PUSH, CALL) or **EXECUTE** (POP, RET), so the new value is visible from the next state.
-- **The halt** cycles FETCH1 to EXECUTE on `JMP 57`, so the PC runs 57, 58, 59, 5A, 5A and jumps back.
+- **The halt** cycles FETCH1 to EXECUTE on `JMP 99`, so the PC runs 99, 9A, 9B, 9C, 9C and jumps back.
 
 | Cycle | State | PC | SP | IR | Instruction being executed | reg_a | Z | C |
 |---|---|---|---|---|---|---|---|---|
@@ -804,15 +861,15 @@ How to read it:
 | 74 | FETCH3 | 2F | F0 | `0B002D` | CMP R3, R2 | D3 | 0 | 1 |
 | 75 | DECODE | 30 | F0 | `0B322D` | CMP R3, R2 | FF | 0 | 1 |
 | 76 | EXECUTE | 30 | F0 | `0B3200` | CMP R3, R2 | FF | 0 | 1 |
-| 77 | FETCH1 | 30 | F0 | `0B3200` | JNZ 57 | FF | 1 | 0 |
-| 78 | FETCH2 | 31 | F0 | `0B3200` | JNZ 57 | FF | 1 | 0 |
-| 79 | FETCH3 | 32 | F0 | `0E3200` | JNZ 57 | FF | 1 | 0 |
-| 80 | DECODE | 33 | F0 | `0E0000` | JNZ 57 | D3 | 1 | 0 |
-| 81 | EXECUTE | 33 | F0 | `0E0057` | JNZ 57 | D3 | 1 | 0 |
-| 82 | FETCH1 | 33 | F0 | `0E0057` | NOP | D3 | 1 | 0 |
-| 83 | FETCH2 | 34 | F0 | `0E0057` | NOP | D3 | 1 | 0 |
-| 84 | FETCH3 | 35 | F0 | `000057` | NOP | D3 | 1 | 0 |
-| 85 | DECODE | 36 | F0 | `000057` | NOP | D3 | 1 | 0 |
+| 77 | FETCH1 | 30 | F0 | `0B3200` | JNZ 99 | FF | 1 | 0 |
+| 78 | FETCH2 | 31 | F0 | `0B3200` | JNZ 99 | FF | 1 | 0 |
+| 79 | FETCH3 | 32 | F0 | `0E3200` | JNZ 99 | FF | 1 | 0 |
+| 80 | DECODE | 33 | F0 | `0E0000` | JNZ 99 | D3 | 1 | 0 |
+| 81 | EXECUTE | 33 | F0 | `0E0099` | JNZ 99 | D3 | 1 | 0 |
+| 82 | FETCH1 | 33 | F0 | `0E0099` | NOP | D3 | 1 | 0 |
+| 83 | FETCH2 | 34 | F0 | `0E0099` | NOP | D3 | 1 | 0 |
+| 84 | FETCH3 | 35 | F0 | `000099` | NOP | D3 | 1 | 0 |
+| 85 | DECODE | 36 | F0 | `000099` | NOP | D3 | 1 | 0 |
 | 86 | EXECUTE | 36 | F0 | `000000` | NOP | D3 | 1 | 0 |
 | 87 | FETCH1 | 36 | F0 | `000000` | INC R2 | D3 | 1 | 0 |
 | 88 | FETCH2 | 37 | F0 | `000000` | INC R2 | D3 | 1 | 0 |
@@ -982,23 +1039,168 @@ How to read it:
 | 252 | FETCH3 | 56 | F0 | `0E3000` | JNZ 4E | 00 | 1 | 0 |
 | 253 | DECODE | 57 | F0 | `0E0000` | JNZ 4E | 57 | 1 | 0 |
 | 254 | EXECUTE | 57 | F0 | `0E004E` | JNZ 4E | 57 | 1 | 0 |
-| 255 | FETCH1 | 57 | F0 | `0E004E` | JMP 57 | 57 | 1 | 0 |
-| 256 | FETCH2 | 58 | F0 | `0E004E` | JMP 57 | 57 | 1 | 0 |
-| 257 | FETCH3 | 59 | F0 | `0C004E` | JMP 57 | 57 | 1 | 0 |
-| 258 | DECODE | 5A | F0 | `0C004E` | JMP 57 | 57 | 1 | 0 |
-| 259 | EXECUTE | 5A | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 260 | FETCH1 | 57 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 261 | FETCH2 | 58 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 262 | FETCH3 | 59 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 263 | DECODE | 5A | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 264 | EXECUTE | 5A | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 265 | FETCH1 | 57 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 266 | FETCH2 | 58 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 267 | FETCH3 | 59 | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 268 | DECODE | 5A | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
-| 269 | EXECUTE | 5A | F0 | `0C0057` | JMP 57 | 57 | 1 | 0 |
+| 255 | FETCH1 | 57 | F0 | `0E004E` | JMP 6F | 57 | 1 | 0 |
+| 256 | FETCH2 | 58 | F0 | `0E004E` | JMP 6F | 57 | 1 | 0 |
+| 257 | FETCH3 | 59 | F0 | `0C004E` | JMP 6F | 57 | 1 | 0 |
+| 258 | DECODE | 5A | F0 | `0C004E` | JMP 6F | 57 | 1 | 0 |
+| 259 | EXECUTE | 5A | F0 | `0C006F` | JMP 6F | 57 | 1 | 0 |
+| 260 | FETCH1 | 6F | F0 | `0C006F` | LDI R3, F1 | 57 | 1 | 0 |
+| 261 | FETCH2 | 70 | F0 | `0C006F` | LDI R3, F1 | 57 | 1 | 0 |
+| 262 | FETCH3 | 71 | F0 | `01006F` | LDI R3, F1 | 57 | 1 | 0 |
+| 263 | DECODE | 72 | F0 | `01306F` | LDI R3, F1 | 00 | 1 | 0 |
+| 264 | WRITEBACK | 72 | F0 | `0130F1` | LDI R3, F1 | 00 | 1 | 0 |
+| 265 | FETCH1 | 72 | F0 | `0130F1` | STR R0, [R3] | F1 | 1 | 0 |
+| 266 | FETCH2 | 73 | F0 | `0130F1` | STR R0, [R3] | F1 | 1 | 0 |
+| 267 | FETCH3 | 74 | F0 | `1930F1` | STR R0, [R3] | F1 | 1 | 0 |
+| 268 | DECODE | 75 | F0 | `1903F1` | STR R0, [R3] | 57 | 1 | 0 |
+| 269 | EXECUTE | 75 | F0 | `190300` | STR R0, [R3] | 57 | 1 | 0 |
+| 270 | FETCH1 | 75 | F0 | `190300` | INC R3 | 57 | 1 | 0 |
+| 271 | FETCH2 | 76 | F0 | `190300` | INC R3 | 57 | 1 | 0 |
+| 272 | FETCH3 | 77 | F0 | `120300` | INC R3 | 57 | 1 | 0 |
+| 273 | DECODE | 78 | F0 | `123000` | INC R3 | F1 | 1 | 0 |
+| 274 | EXECUTE | 78 | F0 | `123000` | INC R3 | F1 | 1 | 0 |
+| 275 | WRITEBACK | 78 | F0 | `123000` | INC R3 | F1 | 0 | 0 |
+| 276 | FETCH1 | 78 | F0 | `123000` | STR R1, [R3] | F2 | 0 | 0 |
+| 277 | FETCH2 | 79 | F0 | `123000` | STR R1, [R3] | F2 | 0 | 0 |
+| 278 | FETCH3 | 7A | F0 | `193000` | STR R1, [R3] | F2 | 0 | 0 |
+| 279 | DECODE | 7B | F0 | `191300` | STR R1, [R3] | 3B | 0 | 0 |
+| 280 | EXECUTE | 7B | F0 | `191300` | STR R1, [R3] | 3B | 0 | 0 |
+| 281 | FETCH1 | 7B | F0 | `191300` | INC R3 | 3B | 0 | 0 |
+| 282 | FETCH2 | 7C | F0 | `191300` | INC R3 | 3B | 0 | 0 |
+| 283 | FETCH3 | 7D | F0 | `121300` | INC R3 | 3B | 0 | 0 |
+| 284 | DECODE | 7E | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 285 | EXECUTE | 7E | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 286 | WRITEBACK | 7E | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 287 | FETCH1 | 7E | F0 | `123000` | STR R2, [R3] | F3 | 0 | 0 |
+| 288 | FETCH2 | 7F | F0 | `123000` | STR R2, [R3] | F3 | 0 | 0 |
+| 289 | FETCH3 | 80 | F0 | `193000` | STR R2, [R3] | F3 | 0 | 0 |
+| 290 | DECODE | 81 | F0 | `192300` | STR R2, [R3] | 54 | 0 | 0 |
+| 291 | EXECUTE | 81 | F0 | `192300` | STR R2, [R3] | 54 | 0 | 0 |
+| 292 | FETCH1 | 81 | F0 | `192300` | LDI R0, 00 | 54 | 0 | 0 |
+| 293 | FETCH2 | 82 | F0 | `192300` | LDI R0, 00 | 54 | 0 | 0 |
+| 294 | FETCH3 | 83 | F0 | `012300` | LDI R0, 00 | 54 | 0 | 0 |
+| 295 | DECODE | 84 | F0 | `010000` | LDI R0, 00 | 57 | 0 | 0 |
+| 296 | WRITEBACK | 84 | F0 | `010000` | LDI R0, 00 | 57 | 0 | 0 |
+| 297 | FETCH1 | 84 | F0 | `010000` | LDI R3, F1 | 00 | 0 | 0 |
+| 298 | FETCH2 | 85 | F0 | `010000` | LDI R3, F1 | 00 | 0 | 0 |
+| 299 | FETCH3 | 86 | F0 | `010000` | LDI R3, F1 | 00 | 0 | 0 |
+| 300 | DECODE | 87 | F0 | `013000` | LDI R3, F1 | F3 | 0 | 0 |
+| 301 | WRITEBACK | 87 | F0 | `0130F1` | LDI R3, F1 | F3 | 0 | 0 |
+| 302 | FETCH1 | 87 | F0 | `0130F1` | LDI R2, 03 | F1 | 0 | 0 |
+| 303 | FETCH2 | 88 | F0 | `0130F1` | LDI R2, 03 | F1 | 0 | 0 |
+| 304 | FETCH3 | 89 | F0 | `0130F1` | LDI R2, 03 | F1 | 0 | 0 |
+| 305 | DECODE | 8A | F0 | `0120F1` | LDI R2, 03 | 54 | 0 | 0 |
+| 306 | WRITEBACK | 8A | F0 | `012003` | LDI R2, 03 | 54 | 0 | 0 |
+| 307 | FETCH1 | 8A | F0 | `012003` | LDR R1, [R3] | 03 | 0 | 0 |
+| 308 | FETCH2 | 8B | F0 | `012003` | LDR R1, [R3] | 03 | 0 | 0 |
+| 309 | FETCH3 | 8C | F0 | `182003` | LDR R1, [R3] | 03 | 0 | 0 |
+| 310 | DECODE | 8D | F0 | `181303` | LDR R1, [R3] | 3B | 0 | 0 |
+| 311 | EXECUTE | 8D | F0 | `181300` | LDR R1, [R3] | 3B | 0 | 0 |
+| 312 | WRITEBACK | 8D | F0 | `181300` | LDR R1, [R3] | 3B | 0 | 0 |
+| 313 | FETCH1 | 8D | F0 | `181300` | ADD R0, R1 | 57 | 0 | 0 |
+| 314 | FETCH2 | 8E | F0 | `181300` | ADD R0, R1 | 57 | 0 | 0 |
+| 315 | FETCH3 | 8F | F0 | `051300` | ADD R0, R1 | 57 | 0 | 0 |
+| 316 | DECODE | 90 | F0 | `050100` | ADD R0, R1 | 00 | 0 | 0 |
+| 317 | EXECUTE | 90 | F0 | `050100` | ADD R0, R1 | 00 | 0 | 0 |
+| 318 | WRITEBACK | 90 | F0 | `050100` | ADD R0, R1 | 00 | 0 | 0 |
+| 319 | FETCH1 | 90 | F0 | `050100` | INC R3 | 57 | 0 | 0 |
+| 320 | FETCH2 | 91 | F0 | `050100` | INC R3 | 57 | 0 | 0 |
+| 321 | FETCH3 | 92 | F0 | `120100` | INC R3 | 57 | 0 | 0 |
+| 322 | DECODE | 93 | F0 | `123000` | INC R3 | F1 | 0 | 0 |
+| 323 | EXECUTE | 93 | F0 | `123000` | INC R3 | F1 | 0 | 0 |
+| 324 | WRITEBACK | 93 | F0 | `123000` | INC R3 | F1 | 0 | 0 |
+| 325 | FETCH1 | 93 | F0 | `123000` | DEC R2 | F2 | 0 | 0 |
+| 326 | FETCH2 | 94 | F0 | `123000` | DEC R2 | F2 | 0 | 0 |
+| 327 | FETCH3 | 95 | F0 | `133000` | DEC R2 | F2 | 0 | 0 |
+| 328 | DECODE | 96 | F0 | `132000` | DEC R2 | 03 | 0 | 0 |
+| 329 | EXECUTE | 96 | F0 | `132000` | DEC R2 | 03 | 0 | 0 |
+| 330 | WRITEBACK | 96 | F0 | `132000` | DEC R2 | 03 | 0 | 0 |
+| 331 | FETCH1 | 96 | F0 | `132000` | JNZ 8A | 02 | 0 | 0 |
+| 332 | FETCH2 | 97 | F0 | `132000` | JNZ 8A | 02 | 0 | 0 |
+| 333 | FETCH3 | 98 | F0 | `0E2000` | JNZ 8A | 02 | 0 | 0 |
+| 334 | DECODE | 99 | F0 | `0E0000` | JNZ 8A | 57 | 0 | 0 |
+| 335 | EXECUTE | 99 | F0 | `0E008A` | JNZ 8A | 57 | 0 | 0 |
+| 336 | FETCH1 | 8A | F0 | `0E008A` | LDR R1, [R3] | 57 | 0 | 0 |
+| 337 | FETCH2 | 8B | F0 | `0E008A` | LDR R1, [R3] | 57 | 0 | 0 |
+| 338 | FETCH3 | 8C | F0 | `18008A` | LDR R1, [R3] | 57 | 0 | 0 |
+| 339 | DECODE | 8D | F0 | `18138A` | LDR R1, [R3] | 57 | 0 | 0 |
+| 340 | EXECUTE | 8D | F0 | `181300` | LDR R1, [R3] | 57 | 0 | 0 |
+| 341 | WRITEBACK | 8D | F0 | `181300` | LDR R1, [R3] | 57 | 0 | 0 |
+| 342 | FETCH1 | 8D | F0 | `181300` | ADD R0, R1 | 3B | 0 | 0 |
+| 343 | FETCH2 | 8E | F0 | `181300` | ADD R0, R1 | 3B | 0 | 0 |
+| 344 | FETCH3 | 8F | F0 | `051300` | ADD R0, R1 | 3B | 0 | 0 |
+| 345 | DECODE | 90 | F0 | `050100` | ADD R0, R1 | 57 | 0 | 0 |
+| 346 | EXECUTE | 90 | F0 | `050100` | ADD R0, R1 | 57 | 0 | 0 |
+| 347 | WRITEBACK | 90 | F0 | `050100` | ADD R0, R1 | 57 | 0 | 0 |
+| 348 | FETCH1 | 90 | F0 | `050100` | INC R3 | 92 | 0 | 0 |
+| 349 | FETCH2 | 91 | F0 | `050100` | INC R3 | 92 | 0 | 0 |
+| 350 | FETCH3 | 92 | F0 | `120100` | INC R3 | 92 | 0 | 0 |
+| 351 | DECODE | 93 | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 352 | EXECUTE | 93 | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 353 | WRITEBACK | 93 | F0 | `123000` | INC R3 | F2 | 0 | 0 |
+| 354 | FETCH1 | 93 | F0 | `123000` | DEC R2 | F3 | 0 | 0 |
+| 355 | FETCH2 | 94 | F0 | `123000` | DEC R2 | F3 | 0 | 0 |
+| 356 | FETCH3 | 95 | F0 | `133000` | DEC R2 | F3 | 0 | 0 |
+| 357 | DECODE | 96 | F0 | `132000` | DEC R2 | 02 | 0 | 0 |
+| 358 | EXECUTE | 96 | F0 | `132000` | DEC R2 | 02 | 0 | 0 |
+| 359 | WRITEBACK | 96 | F0 | `132000` | DEC R2 | 02 | 0 | 0 |
+| 360 | FETCH1 | 96 | F0 | `132000` | JNZ 8A | 01 | 0 | 0 |
+| 361 | FETCH2 | 97 | F0 | `132000` | JNZ 8A | 01 | 0 | 0 |
+| 362 | FETCH3 | 98 | F0 | `0E2000` | JNZ 8A | 01 | 0 | 0 |
+| 363 | DECODE | 99 | F0 | `0E0000` | JNZ 8A | 92 | 0 | 0 |
+| 364 | EXECUTE | 99 | F0 | `0E008A` | JNZ 8A | 92 | 0 | 0 |
+| 365 | FETCH1 | 8A | F0 | `0E008A` | LDR R1, [R3] | 92 | 0 | 0 |
+| 366 | FETCH2 | 8B | F0 | `0E008A` | LDR R1, [R3] | 92 | 0 | 0 |
+| 367 | FETCH3 | 8C | F0 | `18008A` | LDR R1, [R3] | 92 | 0 | 0 |
+| 368 | DECODE | 8D | F0 | `18138A` | LDR R1, [R3] | 3B | 0 | 0 |
+| 369 | EXECUTE | 8D | F0 | `181300` | LDR R1, [R3] | 3B | 0 | 0 |
+| 370 | WRITEBACK | 8D | F0 | `181300` | LDR R1, [R3] | 3B | 0 | 0 |
+| 371 | FETCH1 | 8D | F0 | `181300` | ADD R0, R1 | 54 | 0 | 0 |
+| 372 | FETCH2 | 8E | F0 | `181300` | ADD R0, R1 | 54 | 0 | 0 |
+| 373 | FETCH3 | 8F | F0 | `051300` | ADD R0, R1 | 54 | 0 | 0 |
+| 374 | DECODE | 90 | F0 | `050100` | ADD R0, R1 | 92 | 0 | 0 |
+| 375 | EXECUTE | 90 | F0 | `050100` | ADD R0, R1 | 92 | 0 | 0 |
+| 376 | WRITEBACK | 90 | F0 | `050100` | ADD R0, R1 | 92 | 0 | 0 |
+| 377 | FETCH1 | 90 | F0 | `050100` | INC R3 | E6 | 0 | 0 |
+| 378 | FETCH2 | 91 | F0 | `050100` | INC R3 | E6 | 0 | 0 |
+| 379 | FETCH3 | 92 | F0 | `120100` | INC R3 | E6 | 0 | 0 |
+| 380 | DECODE | 93 | F0 | `123000` | INC R3 | F3 | 0 | 0 |
+| 381 | EXECUTE | 93 | F0 | `123000` | INC R3 | F3 | 0 | 0 |
+| 382 | WRITEBACK | 93 | F0 | `123000` | INC R3 | F3 | 0 | 0 |
+| 383 | FETCH1 | 93 | F0 | `123000` | DEC R2 | F4 | 0 | 0 |
+| 384 | FETCH2 | 94 | F0 | `123000` | DEC R2 | F4 | 0 | 0 |
+| 385 | FETCH3 | 95 | F0 | `133000` | DEC R2 | F4 | 0 | 0 |
+| 386 | DECODE | 96 | F0 | `132000` | DEC R2 | 01 | 0 | 0 |
+| 387 | EXECUTE | 96 | F0 | `132000` | DEC R2 | 01 | 0 | 0 |
+| 388 | WRITEBACK | 96 | F0 | `132000` | DEC R2 | 01 | 1 | 0 |
+| 389 | FETCH1 | 96 | F0 | `132000` | JNZ 8A | 00 | 1 | 0 |
+| 390 | FETCH2 | 97 | F0 | `132000` | JNZ 8A | 00 | 1 | 0 |
+| 391 | FETCH3 | 98 | F0 | `0E2000` | JNZ 8A | 00 | 1 | 0 |
+| 392 | DECODE | 99 | F0 | `0E0000` | JNZ 8A | E6 | 1 | 0 |
+| 393 | EXECUTE | 99 | F0 | `0E008A` | JNZ 8A | E6 | 1 | 0 |
+| 394 | FETCH1 | 99 | F0 | `0E008A` | JMP 99 | E6 | 1 | 0 |
+| 395 | FETCH2 | 9A | F0 | `0E008A` | JMP 99 | E6 | 1 | 0 |
+| 396 | FETCH3 | 9B | F0 | `0C008A` | JMP 99 | E6 | 1 | 0 |
+| 397 | DECODE | 9C | F0 | `0C008A` | JMP 99 | E6 | 1 | 0 |
+| 398 | EXECUTE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 399 | FETCH1 | 99 | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 400 | FETCH2 | 9A | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 401 | FETCH3 | 9B | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 402 | DECODE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 403 | EXECUTE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 404 | FETCH1 | 99 | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 405 | FETCH2 | 9A | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 406 | FETCH3 | 9B | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 407 | DECODE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 408 | EXECUTE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 409 | FETCH1 | 99 | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 410 | FETCH2 | 9A | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 411 | FETCH3 | 9B | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 412 | DECODE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
+| 413 | EXECUTE | 9C | F0 | `0C0099` | JMP 99 | E6 | 1 | 0 |
 
-Key checks: the first 111 cycles are the same as before the stack was added (SP stays `F0`); CALL 5A at cycle 115 drops SP to `EF` and lands at `5A` (cycle 116); PUSH R1 drops SP to `EE` (cycle 120); the nested CALL drops it to `ED` (cycle 130) and its RET returns to `63` (cycle 143); POP R1 restores `3B` (cycle 149); the outer RET returns to `45` with SP back at `F0` (cycle 155); POP R2 gives `54` (cycle 166); the loop calls subroutine 2 three times, R3 counts down to `00` with Z = 1 (cycle 250), and the halt loop runs from cycle 255.
+Key checks: CALL 5A at cycle 115 drops SP to `EF` and lands at `5A` (cycle 116); the nested CALL drops it to `ED` (cycle 130) and its RET returns to `63` (cycle 143); POP R1 restores `3B` (cycle 149); the outer RET returns to `45` with SP back at `F0` (cycle 155); POP R2 gives `54` (cycle 166); the call loop ends with R3 = `00`, Z = 1 (cycle 250); JMP 6F reaches the pointer section (cycle 260); the three STRs write `57`, `3B`, `54` to `F1`-`F3` (cycles 269, 280, 291); the first LDR loads `57` (cycle 313); the sum reaches `E6` (cycle 377); the pointer loop ends with Z = 1 (cycle 388); and the halt loop runs from cycle 394.
+
 ---
 
 ## Writing your own program
@@ -1016,6 +1218,7 @@ constant prog_data : prog_type := (
 
 - **Jump targets are byte addresses:** instruction *n* starts at 3 x *n*. In the example, `DEC` is instruction 1 at `03` and `JMP` is instruction 3 at `09`.
 - Put `REG0` and `x"00"` in unused fields.
+- For a pointer, load an address into a register and use `LDR rd, [rs]` / `STR rd, [rs]`; `INC`/`DEC` the register to step through memory.
 - Keep code well below `EF`: the stack grows down from `EF` towards your code, one byte per PUSH or CALL. Data goes at `F0`-`FF`.
 - Every `CALL` needs a matching `RET`, and every `PUSH` a matching `POP`, or the return address will be wrong.
 - Subroutines go after the halt, so the main program never runs into them.
@@ -1028,7 +1231,7 @@ constant prog_data : prog_type := (
 
 - No interrupts.
 - No rotate or arithmetic-shift instructions; shifts are one bit at a time.
-- Only direct addressing for LD/ST.
+- Only two addressing modes for memory: direct (imm) and register-indirect (a register); no indexed or offset addressing.
 - Unsigned arithmetic only: no overflow or negative flag.
 - Only 4 registers, although the instruction format has room for 16.
 - Code, data and stack share 256 bytes; nothing protects the code from ST, or from a stack that grows too deep.
@@ -1040,7 +1243,6 @@ constant prog_data : prog_type := (
 
 ## Future work
 
-- **Register-indirect addressing** for LD/ST (address taken from a register).
 - **Block RAM**: the shared memory already has a synchronous read-first read, as block RAM does, without needing extra holding registers. Not yet synthesized: run Vivado synthesis (no board needed) and confirm in the utilization report that it is inferred as block RAM.
 - **Load the memory from a text file** at simulation start, so programs can change without editing VHDL.
 - **Simple assembler**: a script that turns assembly text into `prog_data`, so programs no longer have to be encoded by hand.

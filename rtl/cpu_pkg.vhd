@@ -7,13 +7,14 @@
 --               stack pointer reset value and the FSM state type.
 -- Notes       : Instruction format (24-bit, byte-aligned): opcode(23:16) |
 --               rd(15:12) | rs(11:8) | imm(7:0), stored as three bytes.
---               24 opcodes used (00-17); the rest decode as NOP.
+--               26 opcodes used (00-19); the rest decode as NOP.
 --               Only R0-R3 exist; upper bits of rd/rs are reserved (0).
 --               WB_* must match the wb_mux input order.
---               ADDR_* select the memory address (PC, imm or SP), MEMD_* the
---               memory write data (register or PC), PCSRC_* the PC jump
---               source (imm or memory). SP_INIT is the stack pointer reset
---               value; the stack grows down from F0, below the data area.
+--               ADDR_* select the memory address (PC, imm, SP or register),
+--               MEMD_* the memory write data (register or PC), PCSRC_* the PC
+--               jump source (imm or memory). SP_INIT is the stack pointer
+--               reset value; the stack grows down from F0, below the data
+--               area.
 --               state_t has three fetch states, one per instruction byte.
 --------------------------------------------------------------------------------
 library ieee;
@@ -44,6 +45,8 @@ package cpu_pkg is
     constant OP_POP  : std_logic_vector (7 downto 0) := x"15";
     constant OP_CALL : std_logic_vector (7 downto 0) := x"16";
     constant OP_RET  : std_logic_vector (7 downto 0) := x"17";
+    constant OP_LDR  : std_logic_vector (7 downto 0) := x"18";
+    constant OP_STR  : std_logic_vector (7 downto 0) := x"19";
     
     constant ALU_ADD : std_logic_vector (3 downto 0) := "0000";
     constant ALU_SUB : std_logic_vector (3 downto 0) := "0001";
@@ -69,6 +72,7 @@ package cpu_pkg is
     constant ADDR_PC  : std_logic_vector (1 downto 0) := "00";
     constant ADDR_IMM : std_logic_vector (1 downto 0) := "01";
     constant ADDR_SP  : std_logic_vector (1 downto 0) := "10";
+    constant ADDR_REG : std_logic_vector (1 downto 0) := "11";
     
     constant MEMD_REG  : std_logic := '0';
     constant MEMD_PC   : std_logic := '1';

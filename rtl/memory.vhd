@@ -8,7 +8,7 @@
 --               the old byte (read-first).
 --               Each 24-bit instruction is stored as three bytes at 3n, 3n+1,
 --               3n+2: opcode, rd/rs, imm. Code starts at 00; data uses F0-FF;
---               the stack grows down for EF.
+--               the stack grows down from EF.
 --               To change the program, edit the program constant; init_mem
 --               splits it into bytes. Unused addresses hold 00 (NOP).
 --               No reset: contents survive a CPU reset.
@@ -50,7 +50,7 @@ architecture rtl of memory is
         13 => OP_JC   & REG0 & REG0 & x"2D",   -- JC 2D           taken
         14 => OP_LDI  & REG3 & REG0 & x"00",   -- LDI R3, 00      must be skipped
         15 => OP_CMP  & REG3 & REG2 & x"00",   -- CMP R3, R2      Z = 1, R3 unchanged
-        16 => OP_JNZ  & REG0 & REG0 & x"57",   -- JNZ 57          not taken
+        16 => OP_JNZ  & REG0 & REG0 & x"99",   -- JNZ 99          not taken
         17 => OP_NOP  & REG0 & REG0 & x"00",   -- NOP
         18 => OP_INC  & REG2 & REG0 & x"00",   -- INC R2          R2 = 00, Z = 1, C = 1
         19 => OP_DEC  & REG1 & REG0 & x"00",   -- DEC R1          R1 = 3B
@@ -63,14 +63,29 @@ architecture rtl of memory is
         26 => OP_CALL & REG0 & REG0 & x"69",   -- CALL 69         loop: R0 = R0 + 1
         27 => OP_DEC  & REG3 & REG0 & x"00",   -- DEC R3
         28 => OP_JNZ  & REG0 & REG0 & x"4E",   -- JNZ 4E          3 times, then R0 = 57
-        29 => OP_JMP  & REG0 & REG0 & x"57",   -- JMP 57 (halt)
+        29 => OP_JMP  & REG0 & REG0 & x"6F",   -- JMP 6F          to the register-indirect section
         30 => OP_PUSH & REG1 & REG0 & x"00",   -- PUSH R1         SP = EE, MEM[EE] = 3B
         31 => OP_LDI  & REG1 & REG0 & x"77",   -- LDI R1, 77      R1 = 77
         32 => OP_CALL & REG0 & REG0 & x"69",   -- CALL 69         nested: SP = ED, MEM[ED] = 63
         33 => OP_POP  & REG1 & REG0 & x"00",   -- POP R1          R1 = 3B, SP = EF
         34 => OP_RET  & REG0 & REG0 & x"00",   -- RET             PC = 45, SP = F0
         35 => OP_INC  & REG0 & REG0 & x"00",   -- INC R0
-        36 => OP_RET  & REG0 & REG0 & x"00"    -- RET
+        36 => OP_RET  & REG0 & REG0 & x"00",   -- RET
+        37 => OP_LDI  & REG3 & REG0 & x"F1",   -- LDI R3, F1      pointer
+        38 => OP_STR  & REG0 & REG3 & x"00",   -- STR R0, [R3]    MEM[F1] = 57
+        39 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          pointer = F2
+        40 => OP_STR  & REG1 & REG3 & x"00",   -- STR R1, [R3]    MEM[F2] = 3B
+        41 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          pointer = F3
+        42 => OP_STR  & REG2 & REG3 & x"00",   -- STR R2, [R3]    MEM[F3] = 54
+        43 => OP_LDI  & REG0 & REG0 & x"00",   -- LDI R0, 00      sum
+        44 => OP_LDI  & REG3 & REG0 & x"F1",   -- LDI R3, F1      pointer back to F1
+        45 => OP_LDI  & REG2 & REG0 & x"03",   -- LDI R2, 03      counter
+        46 => OP_LDR  & REG1 & REG3 & x"00",   -- LDR R1, [R3]    loop: R1 = MEM[pointer]
+        47 => OP_ADD  & REG0 & REG1 & x"00",   -- ADD R0, R1      sum
+        48 => OP_INC  & REG3 & REG0 & x"00",   -- INC R3          next byte
+        49 => OP_DEC  & REG2 & REG0 & x"00",   -- DEC R2
+        50 => OP_JNZ  & REG0 & REG0 & x"8A",   -- JNZ 8A          3 times
+        51 => OP_JMP  & REG0 & REG0 & x"99"    -- JMP 99 (halt)   R0 = E6
     );
 
     function init_mem (prog_data : prog_type) return mem_type is

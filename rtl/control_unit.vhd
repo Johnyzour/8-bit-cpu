@@ -11,17 +11,18 @@
 --               increment the PC. The shared memory reads synchronously, so
 --               each byte is loaded into the IR one state later: opcode in
 --               FETCH2, rd/rs in FETCH3, imm in DECODE.
---               mem_addr_sel selects imm in EXECUTE for LD and ST, SP in
---               EXECUTE for PUSH, POP, CALL and RET, and the PC otherwise.
+--               mem_addr_sel selects imm in EXECUTE for LD and ST, the rs
+--               register for LDR and STR, SP for PUSH, POP, CALL and RET,
+--               and the PC otherwise.
 --               PUSH and CALL decrement SP in DECODE and write in EXECUTE
 --               (CALL writes the return address and jumps on the same edge).
 --               POP and RET read in EXECUTE, increment SP, and use the byte in
 --               WRITEBACK (POP writes rd, RET loads the PC).
---               LDI and MOV skip EXECUTE. NOP, ST, CMP, PUSH, CALL and the
---               jumps skip WRITEBACK. ALU ops, LD, POP and RET take all six
---               states. ADD, SUB, CMP, SHL, SHR, INC and DEC load Z and C;
---               AND, OR, XOR and NOT load Z only.
---               Unused opcodes (18-FF) behave as NOP. Synchronous active-high
+--               LDI and MOV skip EXECUTE. NOP, ST, STR, CMP, PUSH, CALL and
+--               the jumps skip WRITEBACK. ALU ops, LD, LDR, POP and RET take
+--               all six states. ADD, SUB, CMP, SHL, SHR, INC and DEC load Z
+--               and C; AND, OR, XOR and NOT load Z only.
+--               Unused opcodes (1A-FF) behave as NOP. Synchronous active-high
 --               reset returns to FETCH1.
 --------------------------------------------------------------------------------
 
@@ -87,7 +88,7 @@ begin
                 end if;
             when S_EXECUTE =>
                 case opcode is
-                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC | OP_POP | OP_RET =>
+                    when OP_ADD | OP_SUB | OP_AND | OP_OR | OP_XOR | OP_NOT | OP_LD | OP_SHL | OP_SHR | OP_INC | OP_DEC | OP_POP | OP_RET | OP_LDR =>
                         next_state <= S_WRITEBACK;
                     when others =>
                         next_state <= S_FETCH1;
@@ -144,7 +145,9 @@ begin
             when OP_CALL =>
                 mem_data_sel <= MEMD_PC;
             when OP_RET =>
-                pc_src_sel <= PCSRC_MEM;  
+                pc_src_sel <= PCSRC_MEM;
+            when OP_LDR =>
+                wb_sel <= WB_RAM;
             when others =>
                 null;
         end case;
@@ -196,6 +199,11 @@ begin
                     when OP_RET =>
                         mem_addr_sel <= ADDR_SP;
                         sp_inc <= '1';
+                    when OP_LDR =>
+                        mem_addr_sel <= ADDR_REG;
+                    when OP_STR =>
+                        mem_wr_en <= '1';
+                        mem_addr_sel <= ADDR_REG;    
                     when others =>
                         null;
                 end case;

@@ -71,12 +71,12 @@ begin
         wait until falling_edge(tb_clk);
         assert(tb_data_out = x"10") report "test 4 failed" severity failure;
 
-        --test5: opcode of the last instruction (RET at 3 x 36)
+        --test5: opcode of the last instruction (JMP at 3 x 51)
         tb_wr_en   <= '0';
-        tb_addr    <= x"6C";
+        tb_addr    <= x"99";
         tb_data_in <= x"00";
         wait until falling_edge(tb_clk);
-        assert(tb_data_out = x"17") report "test 5 failed" severity failure;
+        assert(tb_data_out = x"0C") report "test 5 failed" severity failure;
 
         --test6: imm byte of CALL 5A (instruction 22)
         tb_wr_en   <= '0';
@@ -87,7 +87,7 @@ begin
 
         --test7: first byte after the program is empty
         tb_wr_en   <= '0';
-        tb_addr    <= x"6F";
+        tb_addr    <= x"9C";
         tb_data_in <= x"00";
         wait until falling_edge(tb_clk);
         assert(tb_data_out = x"00") report "test 7 failed" severity failure;

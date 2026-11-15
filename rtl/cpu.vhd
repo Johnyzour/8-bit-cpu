@@ -6,10 +6,11 @@
 --               register, control FSM, register file, ALU, flags register and
 --               writeback mux.
 -- Notes       : One 256 x 8 memory holds the program, the data and the stack.
---               The address comes from the PC (fetch), imm (LD/ST) or SP
---               (PUSH/POP/CALL/RET), selected by two cascaded mux2. Memory
---               write data is a register, or the PC for CALL; the PC jump
---               address is imm, or the memory output for RET.
+--               The address comes from the PC (fetch), imm (LD/ST), SP
+--               (PUSH/POP/CALL/RET) or the rs register (LDR/STR), selected
+--               by three mux2 arranged as a 4-to-1 mux. Memory write data is
+--               a register, or the PC for CALL; the PC jump address is imm,
+--               or the memory output for RET.
 --               Instruction format (24-bit): opcode(23:16) | rd(15:12) |
 --               rs(11:8) | imm(7:0), stored as three bytes and fetched one
 --               byte per clock in FETCH1-3; only bits 13:12 and 9:8 select
@@ -64,6 +65,7 @@ architecture structural of cpu is
     signal ir_load      : std_logic_vector (2 downto 0);
     signal sp_val       : std_logic_vector (7 downto 0);
     signal addr_a       : std_logic_vector (7 downto 0);
+    signal addr_b       : std_logic_vector (7 downto 0);    
     signal mem_data_in  : std_logic_vector (7 downto 0);
     signal jump_addr    : std_logic_vector (7 downto 0);
     signal state        : state_t;
@@ -173,10 +175,18 @@ begin
         y   => addr_a        
     );
     
+    u_addr_mux_hi : entity work.mux2
+    port map (
+        in0 => sp_val,
+        in1 => reg_b,
+        sel => mem_addr_sel(0),
+        y   => addr_b
+    );
+    
     u_addr_mux_sp : entity work.mux2
     port map (
         in0 => addr_a,
-        in1 => sp_val,
+        in1 => addr_b,
         sel => mem_addr_sel(1),
         y   => mem_addr  
     );

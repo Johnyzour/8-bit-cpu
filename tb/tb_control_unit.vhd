@@ -6,10 +6,11 @@
 --               and all control outputs in each state, including the IR byte
 --               loads, the memory address and data selects, the stack pointer
 --               enables and the PC source select. Covers each conditional jump
---               taken and not taken, PUSH, POP, CALL and RET, an unused opcode
---               (treated as NOP), and reset in the middle of an instruction.
+--               taken and not taken, PUSH, POP, CALL, RET, LDR and STR, an
+--               unused opcode (treated as NOP), and reset in the middle of an
+--               instruction.
 -- Notes       : The opcode changes only during FETCH1, as the IR would load it.
---               Prints "all tests completed and passed" at 1590 ns.
+--               Prints "all tests completed and passed" at 1700 ns.
 --------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -419,16 +420,33 @@ begin
         wait until falling_edge(tb_clk); execute("test 28 RET", '0', '0', '0', '0', '1', ALU_ADD, WB_ALU, ADDR_SP, MEMD_REG, PCSRC_MEM);
         wait until falling_edge(tb_clk); writeback("test 28 RET", '1', '0', ALU_ADD, WB_ALU, MEMD_REG, PCSRC_MEM);
         wait until falling_edge(tb_clk); fetch1("test 28 RET");
+        
+        --test29: LDR (F1 F2 F3 D E W, memory address = rs register in EXECUTE)
+        tb_opcode <= OP_LDR; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); fetch2("test 29 LDR");
+        wait until falling_edge(tb_clk); fetch3("test 29 LDR");
+        wait until falling_edge(tb_clk); decode("test 29 LDR", '0', ALU_ADD, WB_RAM, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); execute("test 29 LDR", '0', '0', '0', '0', '0', ALU_ADD, WB_RAM, ADDR_REG, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); writeback("test 29 LDR", '0', '1', ALU_ADD, WB_RAM, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); fetch1("test 29 LDR");
 
-        --test29: reset during DECODE returns to FETCH1, then resumes
+        --test30: STR (F1 F2 F3 D E, write at address in rs register)
+        tb_opcode <= OP_STR; tb_z_flag <= '0'; tb_c_flag <= '0';
+        wait until falling_edge(tb_clk); fetch2("test 30 STR");
+        wait until falling_edge(tb_clk); fetch3("test 30 STR");
+        wait until falling_edge(tb_clk); decode("test 30 STR", '0', ALU_ADD, WB_ALU, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); execute("test 30 STR", '0', '1', '0', '0', '0', ALU_ADD, WB_ALU, ADDR_REG, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); fetch1("test 30 STR");
+        
+        --test31: reset during DECODE returns to FETCH1, then resumes
         tb_opcode <= OP_ADD; tb_z_flag <= '0'; tb_c_flag <= '0';
-        wait until falling_edge(tb_clk); fetch2("test 29 ADD");
-        wait until falling_edge(tb_clk); fetch3("test 29 ADD");
-        wait until falling_edge(tb_clk); decode("test 29 ADD", '0', ALU_ADD, WB_ALU, MEMD_REG, PCSRC_IMM);
+        wait until falling_edge(tb_clk); fetch2("test 31 ADD");
+        wait until falling_edge(tb_clk); fetch3("test 31 ADD");
+        wait until falling_edge(tb_clk); decode("test 31 ADD", '0', ALU_ADD, WB_ALU, MEMD_REG, PCSRC_IMM);
         tb_rst <= '1';
-        wait until falling_edge(tb_clk); fetch1("test 29 reset");
+        wait until falling_edge(tb_clk); fetch1("test 31 reset");
         tb_rst <= '0';
-        wait until falling_edge(tb_clk); fetch2("test 29 resume");
+        wait until falling_edge(tb_clk); fetch2("test 31 resume");
 
         report "all tests completed and passed" severity note;
         wait;        
