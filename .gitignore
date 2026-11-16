@@ -10,3 +10,4 @@
 xsim.dir/
 *.wdb
 *.wcfg
+.vscode
