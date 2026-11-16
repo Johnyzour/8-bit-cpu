@@ -1389,4 +1389,4 @@ All three end with Z = 1, C = 0, SP = `F0`.
 
 ## Future work
 
-All planned items are done.
+- **SystemVerilog remake**: rewrite the CPU in SystemVerilog, in a new repository.
