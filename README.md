@@ -22,7 +22,7 @@ Programs are written in assembly and turned into `program.mem` by a small
 **two-pass assembler** (`tools/asm.py`) with labels. `tb_run` runs any program
 to its halt without checking a trace.
 
-**Status:** RTL complete. All 11 self-checking testbenches pass. Synthesizes in Vivado with
+**Status:** complete. All 11 self-checking testbenches pass. Synthesizes in Vivado with
 0 warnings, and the shared memory is inferred as one block RAM (RAMB18).
 
 > **Branches**
@@ -31,9 +31,9 @@ to its halt without checking a trace.
 > |---|---|---|
 > | `single-cycle` | Single-cycle CPU, 16-bit instructions (tag `v1.0-single-cycle`) | Complete, frozen |
 > | `multicycle` | Multi-cycle Harvard CPU with an FSM control unit, 24-bit instructions, 20 instructions (tag `v1.1-multicycle-harvard`) | Complete, frozen |
-> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch, hardware stack with PUSH/POP/CALL/RET, register-indirect LDR/STR (tag `v1.2-multicycle-von-neumann`) | Actively under development (this branch) |
+> | `von-neumann` | Multi-cycle von Neumann CPU: one shared 256 x 8 memory, byte-wise fetch, hardware stack with PUSH/POP/CALL/RET, register-indirect LDR/STR (tag `v1.2-multicycle-von-neumann`) | Complete, frozen (this branch) |
 >
-> `single-cycle` and `multicycle` are frozen. All further development happens on `von-neumann`.
+> All three branches are complete and frozen. Development continues in the SystemVerilog remake: [Johnyzour/8-bit-cpu-systemverilog](https://github.com/Johnyzour/8-bit-cpu-systemverilog).
 
 ---
 
@@ -1389,4 +1389,4 @@ All three end with Z = 1, C = 0, SP = `F0`.
 
 ## Future work
 
-- **SystemVerilog remake**: rewrite the CPU in SystemVerilog, in a new repository.
+- **SystemVerilog remake**: done, in [Johnyzour/8-bit-cpu-systemverilog](https://github.com/Johnyzour/8-bit-cpu-systemverilog). Further development continues there.
